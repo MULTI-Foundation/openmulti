@@ -4,12 +4,17 @@ export type Tier = 'economy' | 'balanced' | 'quality'
 
 export type Purpose = 'generation' | 'light' | 'agent' | 'edit-html-block' | string
 
+/** How OpenMulti picks among a tier's candidate models. */
+export type RouteStrategy = 'default' | 'smart'
+
 /** The OpenMulti extension block a caller may attach to a chat request. */
 export interface OpenMultiExtension {
   tier?: Tier
   purpose?: Purpose
   /** Hard constraint: pick only within these concrete model IDs. */
   allow?: string[]
+  /** Selection strategy among tier candidates. Defaults to OPENMULTI_DEFAULT_ROUTE. */
+  route?: RouteStrategy
 }
 
 export interface ChatMessage {
@@ -36,3 +41,6 @@ export interface RouteDecision {
   model: string
   reason: string
 }
+
+/** Hono environment: the auth middleware stashes the calling project's API key here. */
+export type AppEnv = { Variables: { apiKey: string } }

@@ -8,30 +8,56 @@
 
 import type { Tier } from './types.js'
 
-export const TIER_MODELS: Record<Tier, string> = {
-  economy: process.env.OPENMULTI_MODEL_ECONOMY || 'anthropic/claude-haiku-4-5',
-  balanced: process.env.OPENMULTI_MODEL_BALANCED || 'anthropic/claude-sonnet-4-5',
-  quality: process.env.OPENMULTI_MODEL_QUALITY || 'anthropic/claude-opus-4-1',
+// Default primary model per tier — the iso-comportement model. It MUST stay the first
+// candidate so the 'default' selection strategy reproduces today's behavior exactly.
+const TIER_DEFAULT: Record<Tier, string> = {
+  economy: 'anthropic/claude-haiku-4-5',
+  balanced: 'anthropic/claude-sonnet-4-5',
+  quality: 'anthropic/claude-opus-4-1',
 }
 
 // Routing par tache: certaines taches ont un modele plus adapte que le defaut du tier.
 // 'agent' = generation de code longue (containers OpenClaw): on route vers un modele de
 // code (Kimi K2.6) sur balanced/quality. C'est pourquoi le floor max_tokens Kimi et le
-// steering provider de buildUpstreamBody se declenchent pour ces appels. Premier pas de
-// l'intelligence "le bon modele pour la bonne tache"; etendre/affiner ici.
-const PURPOSE_OVERRIDES: Record<string, Partial<Record<Tier, string>>> = {
-  agent: {
-    balanced: process.env.OPENMULTI_MODEL_AGENT_BALANCED || 'moonshotai/kimi-k2.6',
-    quality: process.env.OPENMULTI_MODEL_AGENT_QUALITY || 'moonshotai/kimi-k2.6',
-  },
+// steering provider de buildUpstreamBody se declenchent pour ces appels.
+const PURPOSE_DEFAULT: Record<string, Partial<Record<Tier, string>>> = {
+  agent: { balanced: 'moonshotai/kimi-k2.6', quality: 'moonshotai/kimi-k2.6' },
 }
 
-/** Resolve the concrete model for a tier, refined by task when a purpose is given. */
-export function modelFor(tier: Tier, purpose?: string): string {
-  const override = purpose ? PURPOSE_OVERRIDES[purpose]?.[tier] : undefined
-  return override ?? TIER_MODELS[tier]
+function envList(name: string): string[] | undefined {
+  const v = process.env[name]
+  if (!v) return undefined
+  const list = v.split(',').map((s) => s.trim()).filter(Boolean)
+  return list.length ? list : undefined
 }
 
+const envName = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '_')
+
+/**
+ * Ordered candidate models for a (tier, purpose). The FIRST is the iso-comportement
+ * primary — the 'default' strategy always picks it, so behavior is unchanged unless a
+ * caller opts into 'smart' (see select.ts). Config precedence per slot:
+ *   1. plural env OPENMULTI_MODELS_[PURPOSE_]TIER (comma-separated) -> the full set
+ *   2. singular env OPENMULTI_MODEL_[PURPOSE_]TIER (back-compat) -> a one-model set
+ *   3. built-in default
+ * A purpose with no model of its own falls through to the tier candidates.
+ */
+export function candidatesFor(tier: Tier, purpose?: string): string[] {
+  const T = envName(tier)
+  if (purpose) {
+    const slot = `${envName(purpose)}_${T}`
+    const plural = envList(`OPENMULTI_MODELS_${slot}`)
+    if (plural) return plural
+    const single = process.env[`OPENMULTI_MODEL_${slot}`] || PURPOSE_DEFAULT[purpose]?.[tier]
+    if (single) return [single]
+  }
+  return envList(`OPENMULTI_MODELS_${T}`) ?? [process.env[`OPENMULTI_MODEL_${T}`] || TIER_DEFAULT[tier]]
+}
+
+// Image generation is a /v1/chat/completions call with modalities:['image','text']
+// (OpenRouter contract). When a caller asks for image output via `auto` (rather than
+// pinning a concrete image model), the router resolves to this model — a text tier
+// would be wrong. Image gen is part of bloc A (OpenMulti owns it), cf ARCHITECTURE.md.
 export const IMAGE_MODEL = process.env.OPENMULTI_MODEL_IMAGE || 'google/gemini-2.5-flash-image'
 
 export const DEFAULT_TIER: Tier = 'balanced'

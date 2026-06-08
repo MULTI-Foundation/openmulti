@@ -20,6 +20,19 @@ export const config = {
     .split(',')
     .map((k) => k.trim())
     .filter(Boolean),
+  // Max retries on a transient upstream failure (same model). 0 disables. Only ever
+  // fires before any byte reaches the client, so it's safe for stream + non-stream.
+  maxRetries: Math.max(0, Number(process.env.OPENMULTI_MAX_RETRIES ?? 2)),
+  // Default selection strategy among a tier's candidates. 'default' = first candidate
+  // (iso-comportement). Per-request override via openmulti.route. See select.ts.
+  defaultRoute: (process.env.OPENMULTI_DEFAULT_ROUTE === 'smart' ? 'smart' : 'default') as 'default' | 'smart',
+}
+
+// Fail closed: an empty allowlist leaves every /v1 route open (see auth.ts). That's
+// fine for local dev, but in a deployed env it's almost always a missing-config bug.
+// Refuse to boot rather than start silently open.
+if (process.env.NODE_ENV === 'production' && config.apiKeys.length === 0) {
+  throw new Error('OPENMULTI_API_KEYS is required in production (refusing to start open)')
 }
 
 // Timeouts (ms). Ported 1:1 from MyMULTI's proxy so v0 is iso-comportement.
