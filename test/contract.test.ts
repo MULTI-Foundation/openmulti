@@ -18,6 +18,7 @@ process.env.OPENMULTI_API_KEYS ||= 'sk_contract_test'
 process.env.OPENMULTI_MODEL_BALANCED ||= 'anthropic/claude-sonnet-4-5'
 process.env.OPENMULTI_MODEL_ECONOMY ||= 'anthropic/claude-haiku-4-5'
 process.env.OPENMULTI_MODEL_AGENT_BALANCED ||= 'moonshotai/kimi-k2.6'
+process.env.OPENMULTI_MODEL_IMAGE ||= 'google/gemini-2.5-flash-image'
 
 const KEY = 'sk_contract_test'
 let app: { fetch: (req: Request) => Promise<Response> }
@@ -81,6 +82,18 @@ test('4b. un modele concret est honore tel quel', async () => {
   assert.equal(lastBody.model, 'anthropic/claude-sonnet-4-5')
 })
 
+test('4b-bis. auto + modalities image route vers le modele image (pas un modele texte)', async () => {
+  await post({ model: 'auto', modalities: ['image', 'text'], messages: [{ role: 'user', content: 'a cat' }] })
+  assert.equal(lastBody.model, process.env.OPENMULTI_MODEL_IMAGE || 'google/gemini-2.5-flash-image')
+})
+
+test('4f. route:smart est opt-in et sur: avec un seul candidat il reste le modele iso', async () => {
+  // En env de test, balanced n'a qu'un candidat (pas de OPENMULTI_MODELS_*), donc
+  // smart == default == iso. Le routing multi-candidats est teste dans select.test.ts.
+  await post({ model: 'auto', openmulti: { tier: 'balanced', route: 'smart' }, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(lastBody.model, 'anthropic/claude-sonnet-4-5')
+})
+
 test('4c. steering applique upstream (usage.include + provider.sort)', async () => {
   await post({ model: 'auto', openmulti: { tier: 'balanced' }, messages: [{ role: 'user', content: 'hi' }] })
   assert.equal(lastBody.usage?.include, true)
@@ -126,4 +139,47 @@ test('streaming: reponse SSE OpenAI passee en pass-through', async () => {
   const text = await res.text()
   assert.match(text, /data: /)
   assert.match(text, /\[DONE\]/)
+})
+
+test('retry: un 503 transitoire est reessaye (meme modele) puis reussit', async () => {
+  let n = 0
+  globalThis.fetch = (async (_url: any, init: any) => {
+    n++
+    lastBody = JSON.parse(init.body)
+    if (n === 1) return new Response('busy', { status: 503 })
+    return new Response(
+      JSON.stringify({ id: 'gen-2', model: lastBody.model, choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, cost: 0 } }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )
+  }) as any
+  const res = await post({ model: 'auto', openmulti: { tier: 'balanced' }, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  assert.equal(n, 2) // 1 echec + 1 retry reussi
+})
+
+test('retry: une erreur 400 (deterministe) n est PAS reessayee', async () => {
+  let n = 0
+  globalThis.fetch = (async () => {
+    n++
+    return new Response(JSON.stringify({ error: 'bad' }), { status: 400, headers: { 'content-type': 'application/json' } })
+  }) as any
+  const res = await post({ model: 'auto', openmulti: { tier: 'balanced' }, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 400)
+  assert.equal(n, 1)
+})
+
+test('metrics: /metrics exige un bearer valide', async () => {
+  const res = await app.fetch(new Request('http://test/metrics'))
+  assert.equal(res.status, 401)
+})
+
+test('metrics: format prometheus, labelise par projet, jamais le secret brut', async () => {
+  // Les tests precedents ont deja genere du trafic avec KEY -> les series existent.
+  const res = await app.fetch(new Request('http://test/metrics', { headers: { authorization: `Bearer ${KEY}` } }))
+  assert.equal(res.status, 200)
+  const body = await res.text()
+  assert.match(body, /openmulti_requests_total/)
+  assert.match(body, /openmulti_cost_usd_total/)
+  assert.match(body, /key="contract"/) // sk_contract_test -> label projet "contract"
+  assert.doesNotMatch(body, /sk_contract_test/) // le secret brut ne fuit jamais
 })
