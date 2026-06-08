@@ -2,7 +2,7 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { TIER_MODELS, DEFAULT_TIER, isTier } from './catalog.js'
+import { modelFor, DEFAULT_TIER, isTier } from './catalog.js'
 import type { ChatRequest, RouteDecision, Tier } from './types.js'
 
 // "auto", "auto:economy", "auto:quality" -> tier (if encoded in the alias).
@@ -40,9 +40,10 @@ export function route(req: ChatRequest): RouteDecision {
     : alias ?? DEFAULT_TIER
 
   const purpose = req.openmulti?.purpose
+  const model = modelFor(tier, purpose)
   const reason = purpose
     ? `${purpose} task, ${tier} tier`
     : `${tier} tier`
 
-  return { model: TIER_MODELS[tier], reason }
+  return { model, reason }
 }
