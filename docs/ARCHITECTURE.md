@@ -153,11 +153,21 @@ Chaque phase est verifiable et rollback-able independamment.
    comportement actuel: memes IDs de modeles (via mapping tier fixe), meme `sort:throughput`,
    meme hack `max_tokens` Kimi, meme watchdog 60s. Pas d'intelligence encore.
    - Verif: diff de reponses sur un echantillon, parite stricte avec l'appel OpenRouter direct.
-2. **MyMULTI pointe vers OpenMulti via flag.** `client.ts` tape OpenMulti; `gateway.ts`
-   envoie des tiers au lieu d'IDs. Flag off = comportement actuel (rollback instantane).
-   - Verif: parite sur staging, `/api/llm/v1` OpenClaw fonctionne a l'identique, chat + image
-     + ARS Coach + site editor OK.
-3. **Bascule definitive.** OpenRouter n'est plus appele que par OpenMulti. On retire le flag.
+2. **MyMULTI pointe vers OpenMulti via flag.** Decoupe en sous-etapes:
+   - **2a (fait):** `client.ts` + le proxy OpenClaw tapent OpenMulti via un upstream resolu
+     (`lib/llm/upstream.ts`, flag `OPENMULTI_ENABLED`). IDs concrets, honores tels quels par
+     OpenMulti (iso strict). Flag off = comportement actuel (rollback instantane).
+   - **2b (fait, ADDITIF):** les appels internes (`llmGateway`/`llmGatewayStream`: light,
+     generation, edit-html-block) envoient `model='auto' + openmulti:{tier,purpose}` quand le
+     flag est on. `DEFAULT_MODELS` reste la source flag-off (supprime en phase 3). Mapping
+     plan x purpose -> tier dans `lib/llm/tiers.ts`.
+   - **2b-bis (a trancher produit):** convertir le path agent (provisioning OpenClaw, allowlist
+     + softFail du proxy) en tiers. Question ouverte: l'agent choisit-il son modele ou OpenMulti
+     choisit dans le tier ? Touche les containers -> hors d'un pas automatique.
+   - Verif: parite sur staging, `/api/llm/v1` OpenClaw a l'identique, chat + image + ARS Coach
+     + site editor OK.
+3. **Bascule definitive.** OpenRouter n'est plus appele que par OpenMulti. On retire le flag et
+   on supprime `DEFAULT_MODELS` (MyMULTI ne connait plus aucun ID de modele).
    - Verif: smoke prod, surveillance cout/latence 24-48h.
 4. **Intelligence dans OpenMulti.** Routing `auto` reel (v1), puis token reducer, monitoring
    qualite. Adopte par MyMULTI purpose par purpose, opt-in. Aucun Big Bang.
