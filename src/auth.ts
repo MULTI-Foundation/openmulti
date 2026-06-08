@@ -4,8 +4,9 @@
 
 import type { MiddlewareHandler } from 'hono'
 import { config } from './config.js'
+import type { AppEnv } from './types.js'
 
-export const auth: MiddlewareHandler = async (c, next) => {
+export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const header = c.req.header('authorization')
   if (!header?.startsWith('Bearer ')) {
     return c.json({ error: { message: 'Missing authorization', type: 'auth_error' } }, 401)

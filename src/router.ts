@@ -2,8 +2,10 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { modelFor, DEFAULT_TIER, isTier } from './catalog.js'
-import type { ChatRequest, RouteDecision, Tier } from './types.js'
+import { candidatesFor, IMAGE_MODEL, DEFAULT_TIER, isTier } from './catalog.js'
+import { selectModel } from './select.js'
+import { config } from './config.js'
+import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js'
 
 // "auto", "auto:economy", "auto:quality" -> tier (if encoded in the alias).
 function tierFromModelAlias(model: string | undefined): Tier | null {
@@ -35,15 +37,25 @@ export function route(req: ChatRequest): RouteDecision {
     return { model: req.model as string, reason: 'caller pinned a concrete model' }
   }
 
+  // Image generation is a chat completion with image modality. An `auto`/tier
+  // request that wants image output needs an image-capable model, not a text tier.
+  // (A caller that pinned a concrete image model is already handled above.)
+  if (Array.isArray(req.modalities) && req.modalities.includes('image')) {
+    return { model: IMAGE_MODEL, reason: 'image generation' }
+  }
+
   const tier: Tier = req.openmulti?.tier && isTier(req.openmulti.tier)
     ? req.openmulti.tier
     : alias ?? DEFAULT_TIER
 
   const purpose = req.openmulti?.purpose
-  const model = modelFor(tier, purpose)
-  const reason = purpose
-    ? `${purpose} task, ${tier} tier`
-    : `${tier} tier`
+  const strategy: RouteStrategy = req.openmulti?.route === 'smart' ? 'smart' : config.defaultRoute
+  const candidates = candidatesFor(tier, purpose)
+  const sel = selectModel(candidates, strategy)
 
-  return { model, reason }
+  const reason = [purpose ? `${purpose} task` : null, `${tier} tier`, sel.note || null]
+    .filter(Boolean)
+    .join(', ')
+
+  return { model: sel.model, reason }
 }
