@@ -56,7 +56,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    name: Deploy to staging (k3s multi-staging)
+    name: Deploy to staging (k3s openmulti-staging)
     needs: build-push
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
