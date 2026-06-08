@@ -1,19 +1,20 @@
 # OpenMulti - deploiement staging (namespace multi-staging du cluster MyMULTI).
 #
-# Procedure de deploiement (l'image n'est pas sur GHCR, on l'importe dans containerd):
-#   1. docker build -t ghcr.io/julienau/openmulti:staging .
-#   2. docker save ghcr.io/julienau/openmulti:staging | gzip > /tmp/openmulti.tar.gz
-#   3. pour chaque node (cp + workers): scp le tar puis
-#      k3s ctr -n k8s.io images import /tmp/openmulti.tar
-#   4. creer le secret du token (cf OPENMULTI_API_KEYS ci-dessous):
-#      kubectl create secret generic openmulti-secrets -n multi-staging \
-#        --from-literal=OPENMULTI_API_KEYS=sk_om_staging_xxxxxxxx
-#   5. kubectl apply -f deploy/staging.yaml
-#   6. cote MyMULTI staging, activer le flag:
-#      kubectl set env deployment/multi-app -n multi-staging \
-#        OPENMULTI_ENABLED=true \
-#        OPENMULTI_BASE_URL=http://openmulti.multi-staging.svc.cluster.local:8080/v1 \
-#        OPENMULTI_API_KEY=<le meme token qu'OPENMULTI_API_KEYS>
+# Livraison continue: la CI (.github/workflows/ci.yml) build+push l'image sur GHCR
+# (ghcr.io/multi-foundation/openmulti) puis le job `deploy` fait set-image au sha +
+# rollout via un ServiceAccount scope a multi-staging (secret STAGING_KUBECONFIG).
+#
+# Bootstrap initial (one-shot, deja fait):
+#   - secret openmulti-secrets (OPENMULTI_API_KEYS) dans multi-staging.
+#   - cote MyMULTI staging, flag active via:
+#       kubectl set env deployment/multi-app -n multi-staging \
+#         OPENMULTI_ENABLED=true \
+#         OPENMULTI_BASE_URL=http://openmulti.multi-staging.svc.cluster.local:8080/v1 \
+#         OPENMULTI_API_KEY=<le meme token qu'OPENMULTI_API_KEYS>
+#   - kubectl apply -f deploy/staging.yaml
+#
+# Fallback offline (sans GHCR): build local, docker save | gzip, scp sur chaque node,
+# k3s ctr -n k8s.io images import, et imagePullPolicy: Never.
 #
 # OPENROUTER_API_KEY est reutilise depuis le secret Doppler-synced multi-app-secrets.
 apiVersion: apps/v1
@@ -30,8 +31,8 @@ spec:
     spec:
       containers:
         - name: openmulti
-          image: ghcr.io/julienau/openmulti:staging
-          imagePullPolicy: Never  # image pre-importee dans containerd (cf procedure)
+          image: ghcr.io/multi-foundation/openmulti:latest
+          imagePullPolicy: Always  # image publiee sur GHCR par la CI; le job deploy set l'image au sha
           ports: [{ name: http, containerPort: 8080 }]
           env:
             - name: PORT
