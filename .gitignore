@@ -12,6 +12,7 @@ target/
 .env
 .env.*
 *.local
+!.env.example
 
 # Editor / OS
 .vscode/
