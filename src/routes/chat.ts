@@ -113,5 +113,11 @@ chat.post('/v1/chat/completions', async (c) => {
         `completion=${u.completion_tokens} cost=${Number(u.cost ?? 0).toFixed(6)}`,
     )
   }
-  return c.json({ ...data, openmulti: { reason: decision.reason } })
+  // Only echo the routing decision when the caller opted into the extension.
+  // Without it, the response stays byte-identical to the upstream provider, so a
+  // plain OpenAI client (e.g. an agent proxied through us) sees no extra field.
+  if (req.openmulti) {
+    return c.json({ ...data, openmulti: { reason: decision.reason } })
+  }
+  return c.json(data)
 })
