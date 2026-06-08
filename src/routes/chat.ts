@@ -11,6 +11,7 @@ import { buildUpstreamBody, callUpstream, isRetryableStatus } from '../providers
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel } from '../metrics.js'
+import { SseUsageScanner } from '../sse.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
@@ -93,16 +94,14 @@ chat.post('/v1/chat/completions', async (c) => {
   if (isStream && upstream.body) {
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
-    let usageData: { prompt_tokens: number; completion_tokens: number; cost?: number } | null = null
-    let lastProvider: string | null = null
+    const scanner = new SseUsageScanner()
     let lastChunkAt = Date.now()
-    let sseBuffer = '' // accumulate partial SSE lines split across chunk boundaries
     let stalled = false
 
     const watchdog = setInterval(() => {
       if (Date.now() - lastChunkAt > TIMEOUTS.interChunk) {
         stalled = true
-        log.warn('upstream_stalled', { key, model: decision.model, provider: lastProvider })
+        log.warn('upstream_stalled', { key, model: decision.model, provider: scanner.provider })
         call.abort.abort()
         clearInterval(watchdog)
       }
@@ -116,32 +115,19 @@ chat.post('/v1/chat/completions', async (c) => {
           clearInterval(watchdog)
           controller.close()
           log.info('completed', {
-            key, model: decision.model, provider: lastProvider, stream: true, stalled,
-            promptTokens: usageData?.prompt_tokens, completionTokens: usageData?.completion_tokens,
-            cost: usageData?.cost, durationMs: Date.now() - startedAt,
+            key, model: decision.model, provider: scanner.provider, stream: true, stalled,
+            promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+            cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
           recordRequest({
             key, model: decision.model, error: stalled,
-            promptTokens: usageData?.prompt_tokens, completionTokens: usageData?.completion_tokens,
-            costUsd: usageData?.cost, durationMs: Date.now() - startedAt,
+            promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+            costUsd: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
           return
         }
-        controller.enqueue(value)
-        // Parse for cost/provider logging only. The raw bytes pass through
-        // untouched above; buffer here so a `data:` line split across two reads
-        // is still parsed once complete.
-        sseBuffer += decoder.decode(value, { stream: true })
-        const lines = sseBuffer.split('\n')
-        sseBuffer = lines.pop() ?? '' // keep the trailing (possibly partial) line
-        for (const line of lines) {
-          if (!line.startsWith('data: ') || line.includes('[DONE]')) continue
-          try {
-            const parsed = JSON.parse(line.slice(6))
-            if (parsed.usage) usageData = parsed.usage
-            if (parsed.provider) lastProvider = parsed.provider
-          } catch {}
-        }
+        controller.enqueue(value) // raw bytes to the client, untouched
+        scanner.push(decoder.decode(value, { stream: true })) // side-channel: cost/provider
       },
       cancel(reason) {
         // Client disconnected (or the response was aborted downstream): stop the

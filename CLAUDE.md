@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Chaque changement de comportement a un test
+
+Règle non négociable (le mainteneur y tient). Tout changement qui touche le comportement
+**arrive avec un test qui le verrouille**, dans la même passe — pas « plus tard ». Vaut pour les
+fixes de robustesse autant que les features : un bug corrigé sans test de non-régression n'est pas
+fini. Si un changement est dur à tester depuis l'app (parsing, boot, edge case de stream),
+**extrais une fonction pure** et teste-la (cf `src/sse.ts` + `test/sse.test.ts`). Préfère un test
+ciblé (`test/<unit>.test.ts`) au tout-intégration quand c'est de la logique isolable. Et ne jamais
+prétendre « c'est testé » sans avoir mappé le changement à un test précis : avant de l'affirmer,
+relis la liste `npm test` et pointe lequel couvre quoi. Garde le `npm test` + `npm run typecheck`
+verts à chaque commit (la CI les rejoue par commit).
+
 ## Toujours vérifier avant d'affirmer ou de supprimer
 
 Règle non négociable (le mainteneur y tient). Ne jamais qualifier du code de « mort »,

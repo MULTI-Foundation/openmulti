@@ -141,6 +141,28 @@ test('streaming: reponse SSE OpenAI passee en pass-through', async () => {
   assert.match(text, /\[DONE\]/)
 })
 
+test('streaming: annuler la reponse (client deconnecte) abort l upstream', async () => {
+  let captured: AbortSignal | null = null
+  globalThis.fetch = (async (_url: any, init: any) => {
+    captured = init.signal
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'))
+        // jamais close: simule un flux upstream encore en cours
+      },
+    })
+    return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  }) as any
+  const res = await post({ model: 'auto', openmulti: { tier: 'balanced' }, stream: true, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  const reader = res.body!.getReader()
+  await reader.read() // un chunk
+  await reader.cancel() // = deconnexion client
+  await new Promise((r) => setTimeout(r, 10)) // laisser cancel() se propager
+  assert.ok(captured, 'signal upstream non capture')
+  assert.equal((captured as AbortSignal).aborted, true)
+})
+
 test('retry: un 503 transitoire est reessaye (meme modele) puis reussit', async () => {
   let n = 0
   globalThis.fetch = (async (_url: any, init: any) => {
