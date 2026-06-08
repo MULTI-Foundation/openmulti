@@ -29,6 +29,9 @@ spec:
   template:
     metadata: { labels: { app: openmulti } }
     spec:
+      # Reutilise le pull secret existant du cluster (a acces aux packages de l'org).
+      imagePullSecrets:
+        - name: ghcr-credentials
       containers:
         - name: openmulti
           image: ghcr.io/multi-foundation/openmulti:latest
