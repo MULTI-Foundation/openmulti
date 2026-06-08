@@ -1,47 +1,47 @@
-# OpenMulti - deploiement staging (namespace multi-staging du cluster MyMULTI).
+# OpenMulti - deploiement staging dans son namespace DEDIE `openmulti-staging`
+# (co-localise sur le cluster MyMULTI mais isole de multi-staging).
 #
 # Livraison continue: la CI (.github/workflows/ci.yml) build+push l'image sur GHCR
 # (ghcr.io/multi-foundation/openmulti) puis le job `deploy` fait set-image au sha +
-# rollout via un ServiceAccount scope a multi-staging (secret STAGING_KUBECONFIG).
+# rollout via un ServiceAccount scope a `openmulti-staging` (secret STAGING_KUBECONFIG).
+# Ce SA ne peut PAS toucher multi-staging ni la prod (Role namespace, verifie).
 #
-# Bootstrap initial (one-shot, deja fait):
-#   - secret openmulti-secrets (OPENMULTI_API_KEYS) dans multi-staging.
-#   - cote MyMULTI staging, flag active via:
-#       kubectl set env deployment/multi-app -n multi-staging \
-#         OPENMULTI_ENABLED=true \
-#         OPENMULTI_BASE_URL=http://openmulti.multi-staging.svc.cluster.local:8080/v1 \
-#         OPENMULTI_API_KEY=<le meme token qu'OPENMULTI_API_KEYS>
-#   - kubectl apply -f deploy/staging.yaml
-#
-# Fallback offline (sans GHCR): build local, docker save | gzip, scp sur chaque node,
-# k3s ctr -n k8s.io images import, et imagePullPolicy: Never.
-#
-# OPENROUTER_API_KEY est reutilise depuis le secret Doppler-synced multi-app-secrets.
+# Bootstrap one-shot (deja fait, secrets crees hors manifeste pour ne pas versionner
+# de valeurs):
+#   kubectl create namespace openmulti-staging
+#   # OpenMulti a SA PROPRE cle OpenRouter (independance) + le token d'API:
+#   kubectl -n openmulti-staging create secret generic openmulti-secrets \
+#     --from-literal=OPENMULTI_API_KEYS=sk_om_staging_xxx \
+#     --from-literal=OPENROUTER_API_KEY=sk-or-xxx
+#   # pull secret GHCR (copie depuis multi-staging, a acces aux packages de l'org):
+#   kubectl -n openmulti-staging create secret ... ghcr-credentials (dockerconfigjson)
+#   kubectl apply -f deploy/staging.yaml
+#   # cote MyMULTI staging, activer le flag + pointer le service du ns dedie:
+#   kubectl set env deployment/multi-app -n multi-staging \
+#     OPENMULTI_ENABLED=true \
+#     OPENMULTI_BASE_URL=http://openmulti.openmulti-staging.svc.cluster.local:8080/v1 \
+#     OPENMULTI_API_KEY=<le meme token qu'OPENMULTI_API_KEYS>
+---
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: openmulti
-  namespace: multi-staging
-  labels: { app: openmulti }
+metadata: { name: openmulti, namespace: openmulti-staging, labels: { app: openmulti } }
 spec:
   replicas: 1
   selector: { matchLabels: { app: openmulti } }
   template:
     metadata: { labels: { app: openmulti } }
     spec:
-      # Reutilise le pull secret existant du cluster (a acces aux packages de l'org).
-      imagePullSecrets:
-        - name: ghcr-credentials
+      imagePullSecrets: [{ name: ghcr-credentials }]
       containers:
         - name: openmulti
           image: ghcr.io/multi-foundation/openmulti:latest
-          imagePullPolicy: Always  # image publiee sur GHCR par la CI; le job deploy set l'image au sha
+          imagePullPolicy: Always  # CI set l'image au sha exact a chaque deploy
           ports: [{ name: http, containerPort: 8080 }]
           env:
             - name: PORT
               value: "8080"
             - name: OPENROUTER_API_KEY
-              valueFrom: { secretKeyRef: { name: multi-app-secrets, key: OPENROUTER_API_KEY } }
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENROUTER_API_KEY } }
             - name: OPENMULTI_API_KEYS
               valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_API_KEYS } }
             - name: OPENMULTI_REFERER
@@ -62,30 +62,35 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: openmulti
-  namespace: multi-staging
+metadata: { name: openmulti, namespace: openmulti-staging }
 spec:
   type: ClusterIP
   selector: { app: openmulti }
   ports: [{ name: http, port: 8080, targetPort: http }]
 ---
-# Le namespace est en default-deny (ingress+egress). 3 policies additives:
-# OpenMulti accepte le trafic de multi-app sur 8080.
+# default-deny (ingress+egress) sur le namespace dedie.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: allow-openmulti-ingress, namespace: multi-staging }
+metadata: { name: default-deny, namespace: openmulti-staging }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+---
+# Ingress: depuis le ns multi-staging, pods multi-app, port 8080 (cross-namespace).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-from-mymulti, namespace: openmulti-staging }
 spec:
   podSelector: { matchLabels: { app: openmulti } }
   policyTypes: [Ingress]
   ingress:
-    - from: [{ podSelector: { matchLabels: { app: multi-app } } }]
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: multi-staging } }
+          podSelector: { matchLabels: { app: multi-app } }
       ports: [{ port: 8080, protocol: TCP }]
 ---
-# OpenMulti egress: DNS + HTTPS (OpenRouter).
+# Egress: DNS + HTTPS (OpenRouter).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: { name: allow-openmulti-egress, namespace: multi-staging }
+metadata: { name: allow-egress, namespace: openmulti-staging }
 spec:
   podSelector: { matchLabels: { app: openmulti } }
   policyTypes: [Egress]
@@ -94,7 +99,31 @@ spec:
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - ports: [{ port: 443, protocol: TCP }]
 ---
-# multi-app: egress vers OpenMulti sur 8080 (additif au allow-egress de MyMULTI).
+# ServiceAccount de deploiement, scope au seul namespace openmulti-staging.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: gh-deployer, namespace: openmulti-staging }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: gh-deployer, namespace: openmulti-staging }
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: gh-deployer, namespace: openmulti-staging }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: gh-deployer }
+subjects: [{ kind: ServiceAccount, name: gh-deployer, namespace: openmulti-staging }]
+---
+# Cote MyMULTI (ns multi-staging): autorise l'egress de multi-app vers le ns
+# openmulti-staging sur 8080. A appliquer avec des creds admin (le SA gh-deployer
+# n'a pas acces a multi-staging). Documente ici pour la reproductibilite.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: allow-app-to-openmulti, namespace: multi-staging }
@@ -102,5 +131,5 @@ spec:
   podSelector: { matchLabels: { app: multi-app } }
   policyTypes: [Egress]
   egress:
-    - to: [{ podSelector: { matchLabels: { app: openmulti } } }]
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: openmulti-staging } } }]
       ports: [{ port: 8080, protocol: TCP }]

@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: azure/setup-kubectl@v4
-      - name: Configure kubeconfig (scoped SA, multi-staging only)
+      - name: Configure kubeconfig (scoped SA, openmulti-staging only)
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
@@ -70,9 +70,5 @@ jobs:
       - name: Roll out new image
         run: |
           IMG=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${GITHUB_SHA}
-          kubectl -n multi-staging set image deployment/openmulti openmulti=$IMG
-          # Live deployment was bootstrapped with imagePullPolicy:Never (image importee).
-          # Bascule sur Always pour tirer l'image GHCR a chaque rollout.
-          kubectl -n multi-staging patch deployment/openmulti --type=json \
-            -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Always"}]'
-          kubectl -n multi-staging rollout status deployment/openmulti --timeout=180s
+          kubectl -n openmulti-staging set image deployment/openmulti openmulti=$IMG
+          kubectl -n openmulti-staging rollout status deployment/openmulti --timeout=180s
