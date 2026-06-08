@@ -1,0 +1,102 @@
+# OpenMulti - deploiement staging (namespace multi-staging du cluster MyMULTI).
+#
+# Procedure de deploiement (l'image n'est pas sur GHCR, on l'importe dans containerd):
+#   1. docker build -t ghcr.io/julienau/openmulti:staging .
+#   2. docker save ghcr.io/julienau/openmulti:staging | gzip > /tmp/openmulti.tar.gz
+#   3. pour chaque node (cp + workers): scp le tar puis
+#      k3s ctr -n k8s.io images import /tmp/openmulti.tar
+#   4. creer le secret du token (cf OPENMULTI_API_KEYS ci-dessous):
+#      kubectl create secret generic openmulti-secrets -n multi-staging \
+#        --from-literal=OPENMULTI_API_KEYS=sk_om_staging_xxxxxxxx
+#   5. kubectl apply -f deploy/staging.yaml
+#   6. cote MyMULTI staging, activer le flag:
+#      kubectl set env deployment/multi-app -n multi-staging \
+#        OPENMULTI_ENABLED=true \
+#        OPENMULTI_BASE_URL=http://openmulti.multi-staging.svc.cluster.local:8080/v1 \
+#        OPENMULTI_API_KEY=<le meme token qu'OPENMULTI_API_KEYS>
+#
+# OPENROUTER_API_KEY est reutilise depuis le secret Doppler-synced multi-app-secrets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openmulti
+  namespace: multi-staging
+  labels: { app: openmulti }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: openmulti } }
+  template:
+    metadata: { labels: { app: openmulti } }
+    spec:
+      containers:
+        - name: openmulti
+          image: ghcr.io/julienau/openmulti:staging
+          imagePullPolicy: Never  # image pre-importee dans containerd (cf procedure)
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: OPENROUTER_API_KEY
+              valueFrom: { secretKeyRef: { name: multi-app-secrets, key: OPENROUTER_API_KEY } }
+            - name: OPENMULTI_API_KEYS
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_API_KEYS } }
+            - name: OPENMULTI_REFERER
+              value: "https://staging.mymulti.ai"
+            - name: OPENMULTI_TITLE
+              value: "OpenMulti (staging)"
+          readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000  # user `node` de l'image alpine; numerique pour runAsNonRoot
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openmulti
+  namespace: multi-staging
+spec:
+  type: ClusterIP
+  selector: { app: openmulti }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+# Le namespace est en default-deny (ingress+egress). 3 policies additives:
+# OpenMulti accepte le trafic de multi-app sur 8080.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-openmulti-ingress, namespace: multi-staging }
+spec:
+  podSelector: { matchLabels: { app: openmulti } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: multi-app } } }]
+      ports: [{ port: 8080, protocol: TCP }]
+---
+# OpenMulti egress: DNS + HTTPS (OpenRouter).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-openmulti-egress, namespace: multi-staging }
+spec:
+  podSelector: { matchLabels: { app: openmulti } }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ namespaceSelector: {} }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - ports: [{ port: 443, protocol: TCP }]
+---
+# multi-app: egress vers OpenMulti sur 8080 (additif au allow-egress de MyMULTI).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-app-to-openmulti, namespace: multi-staging }
+spec:
+  podSelector: { matchLabels: { app: multi-app } }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: openmulti } } }]
+      ports: [{ port: 8080, protocol: TCP }]
