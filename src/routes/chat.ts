@@ -31,9 +31,15 @@ chat.post('/v1/chat/completions', async (c) => {
   const startedAt = Date.now()
   const key = keyLabel(c.get('apiKey'))
 
+  // OM-02: bound body size. The Content-Length middleware (app.ts) rejects honest
+  // oversized clients before buffering; this catches a missing/lying Content-Length.
+  const raw = await c.req.text().catch(() => '')
+  if (config.maxBodyBytes > 0 && Buffer.byteLength(raw) > config.maxBodyBytes) {
+    return c.json({ error: { message: 'Request body too large', type: 'invalid_request_error' } }, 413)
+  }
   let req: ChatRequest
   try {
-    req = await c.req.json()
+    req = JSON.parse(raw) as ChatRequest
   } catch {
     return c.json({ error: { message: 'Invalid JSON body', type: 'invalid_request_error' } }, 400)
   }
@@ -42,7 +48,7 @@ chat.post('/v1/chat/completions', async (c) => {
   }
 
   const decision = route(req)
-  const body = buildUpstreamBody(req, decision.model)
+  const body = buildUpstreamBody(req, decision.model, decision.maxTokensCeiling)
   const isStream = req.stream === true
 
   log.info('request', { key, model: decision.model, reason: decision.reason, stream: isStream, messages: req.messages.length })

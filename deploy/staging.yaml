@@ -48,6 +48,20 @@ spec:
               value: "https://staging.mymulti.ai"
             - name: OPENMULTI_TITLE
               value: "OpenMulti (staging)"
+            # OM-03: token ops dedie pour /metrics. `optional: true` -> tant que la cle
+            # n'existe pas dans le secret, la var reste vide et /metrics retombe sur
+            # l'auth appelante (zero regression). Ajouter la cle au secret pour l'activer.
+            - name: OPENMULTI_METRICS_TOKEN
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_METRICS_TOKEN, optional: true } }
+            # OM-02: limite de taille de corps (filet, large au-dessus du trafic reel).
+            - name: OPENMULTI_MAX_BODY_BYTES
+              value: "8388608"
+            # OM-01: rate-limit + plafonds max_tokens/tier. Laisses OFF tant que le profil
+            # de trafic MyMULTI n'est pas connu (eviter de throttler du trafic legitime).
+            # - name: OPENMULTI_RATE_LIMIT_PER_MIN
+            #   value: "600"
+            # - name: OPENMULTI_MAX_TOKENS_BALANCED
+            #   value: "32000"
           readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
           resources:

@@ -131,6 +131,21 @@ labelled by **project** (`keyLabel`: `sk_<project>_<secret>` → `<project>`, ne
 secret) × model. This is the substrate for the roadmap's per-key billing and quality monitoring;
 it is pure side-channel and must never alter a proxied response.
 
+## Security gates (opt-in)
+
+Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression-free:
+- **Body size** (`OPENMULTI_MAX_BODY_BYTES`, default 8 MiB) — Content-Length middleware in
+  `app.ts` + byte check in the handler → 413.
+- **Rate limit** (`OPENMULTI_RATE_LIMIT_PER_MIN`, 0=off) — per-project fixed 60s window
+  (`ratelimit.ts`, in-memory, per pod) → 429 + Retry-After.
+- **max_tokens ceiling** (`OPENMULTI_MAX_TOKENS_<TIER>`) — clamp in `buildUpstreamBody` after the
+  Kimi floor, bounds unit cost.
+- **/metrics ops token** (`OPENMULTI_METRICS_TOKEN`) — `metricsAuth` requires it (constant-time)
+  when set, else falls back to caller-key auth. Stops cross-tenant metric reads.
+
+Open findings (not yet fixed): OM-04 (caller-key timing), OM-05 (`model`/`purpose` reflected into
+response headers), OM-06..10 — see the audit doc.
+
 ## Conventions
 
 ESM throughout (`"type": "module"`); **relative imports must use the `.js` extension** even for `.ts`

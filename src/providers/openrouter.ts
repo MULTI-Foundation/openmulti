@@ -14,7 +14,11 @@ import type { ChatRequest } from '../types.js'
  * Mutate the outgoing body: set the resolved model + apply steering. Returns the
  * body ready to send upstream. `req.openmulti` is stripped (provider must not see it).
  */
-export function buildUpstreamBody(req: ChatRequest, resolvedModel: string): Record<string, unknown> {
+export function buildUpstreamBody(
+  req: ChatRequest,
+  resolvedModel: string,
+  maxTokensCeiling?: number,
+): Record<string, unknown> {
   const { openmulti: _omit, ...rest } = req
   const body: Record<string, unknown> = { ...rest, model: resolvedModel }
 
@@ -25,6 +29,13 @@ export function buildUpstreamBody(req: ChatRequest, resolvedModel: string): Reco
   // (Moonshot caps at 8192) which truncates long generations. Floor it when unset.
   if (!body.max_tokens && resolvedModel.startsWith('moonshotai/kimi-k2')) {
     body.max_tokens = 32000
+  }
+
+  // OM-01: clamp max_tokens to the tier ceiling when set (bounds unit cost). Applied
+  // after the Kimi floor so a configured ceiling wins. Also caps an unset value.
+  if (maxTokensCeiling && maxTokensCeiling > 0) {
+    const current = typeof body.max_tokens === 'number' ? body.max_tokens : Infinity
+    if (current > maxTokensCeiling) body.max_tokens = maxTokensCeiling
   }
 
   // Bias routing toward consistently fast providers, keep fallbacks on.

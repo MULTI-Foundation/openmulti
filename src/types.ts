@@ -40,6 +40,8 @@ export interface ChatRequest {
 export interface RouteDecision {
   model: string
   reason: string
+  /** OM-01: optional per-tier ceiling on max_tokens to bound unit cost (0/undef = none). */
+  maxTokensCeiling?: number
 }
 
 /** Hono environment: the auth middleware stashes the calling project's API key here. */

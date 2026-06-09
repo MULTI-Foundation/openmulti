@@ -57,5 +57,8 @@ export function route(req: ChatRequest): RouteDecision {
     .filter(Boolean)
     .join(', ')
 
-  return { model: sel.model, reason }
+  // OM-01: optional per-tier max_tokens ceiling (tier is 'economy'|'balanced'|'quality',
+  // so the env name is safe to build directly). 0/unset disables it.
+  const ceiling = Number(process.env[`OPENMULTI_MAX_TOKENS_${tier.toUpperCase()}`] ?? 0)
+  return { model: sel.model, reason, maxTokensCeiling: ceiling > 0 ? ceiling : undefined }
 }
