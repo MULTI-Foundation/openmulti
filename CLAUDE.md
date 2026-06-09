@@ -129,7 +129,8 @@ restart) exposed at **`GET /metrics`** (authed — exposes per-project cost/toke
 are recorded in `routes/chat.ts` at completion / upstream error / stream stall. Metrics are
 labelled by **project** (`keyLabel`: `sk_<project>_<secret>` → `<project>`, never the raw
 secret) × model. This is the substrate for the roadmap's per-key billing and quality monitoring;
-it is pure side-channel and must never alter a proxied response.
+it is pure side-channel and must never alter a proxied response. Activation côté cluster (token
+ops, scrape Prometheus, requêtes PromQL) : `docs/OBSERVABILITY-SETUP.md`.
 
 ## Security gates (opt-in)
 
