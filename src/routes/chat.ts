@@ -12,6 +12,7 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel } from '../metrics.js'
 import { SseUsageScanner } from '../sse.js'
+import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
@@ -151,8 +152,8 @@ chat.post('/v1/chat/completions', async (c) => {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
-        'X-OpenMulti-Model': decision.model,
-        'X-OpenMulti-Reason': decision.reason,
+        'X-OpenMulti-Model': headerSafe(decision.model),
+        'X-OpenMulti-Reason': headerSafe(decision.reason),
       },
     })
   }

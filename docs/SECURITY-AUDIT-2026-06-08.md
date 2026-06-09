@@ -29,8 +29,8 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 | OM-01 | **Haute** / Moyenne | Pas de rate-limit ni de plafond de coût par clé → épuisement de coût / DoS sur la clé OpenRouter partagée | **Corrigé (opt-in)** |
 | OM-02 | **Haute** / Moyenne | Pas de limite de taille de corps de requête → DoS mémoire | **Corrigé** |
 | OM-03 | Moyenne / Moyenne | `/metrics` lisible par **n'importe quelle** clé appelante → fuite cross-tenant de métriques business | **Corrigé (opt-in)** |
-| OM-04 | Moyenne / Faible | Comparaison de clé API non constante en temps (timing attack) | Partiel (token `/metrics` constant-time ; clés appelantes à faire) |
-| OM-05 | Moyenne / Faible | Entrée appelante (`model`, `purpose`) reflétée non-sanitisée dans les en-têtes de réponse (injection d'en-tête / CRLF) | Ouvert |
+| OM-04 | Moyenne / Faible | Comparaison de clé API non constante en temps (timing attack) | **Corrigé** |
+| OM-05 | Moyenne / Faible | Entrée appelante (`model`, `purpose`) reflétée non-sanitisée dans les en-têtes de réponse (injection d'en-tête / CRLF) | **Corrigé** |
 | OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | Ouvert |
 | OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | Ouvert |
 | OM-08 | Faible / Faible | `/health` non authentifié divulgue la version (fingerprinting) | Ouvert |
@@ -43,6 +43,12 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 > (`OPENMULTI_MAX_TOKENS_*`), limite de taille de corps (`OPENMULTI_MAX_BODY_BYTES`, défaut 8 MiB,
 > gardée au Content-Length + à la lecture), et token ops dédié pour `/metrics`
 > (`OPENMULTI_METRICS_TOKEN`, comparaison constant-time, fallback sur l'auth appelante si absent).
+>
+> **Mise à jour 2026-06-09 (suite)** — OM-04/05 corrigés (branche `fix/security-hardening-om-04-05`) :
+> comparaison constant-time des clés appelantes (sans court-circuit sur la clé qui matche) ; et
+> sanitisation des en-têtes `X-OpenMulti-*` (`headerSafe` retire CR/LF + contrôles, cap 256) — choix
+> de nettoyer en sortie plutôt que rejeter en entrée, pour ne casser aucune requête valide. Tests :
+> `test/sanitize.test.ts` + cas d'intégration CRLF dans `contract.test.ts`.
 
 ---
 
