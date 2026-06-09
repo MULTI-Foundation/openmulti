@@ -4,6 +4,10 @@
 > les séries. Le service expose déjà `GET /metrics` (format Prometheus) ; il ne reste
 > que des étapes **ops** (secret + réseau + scrape). Commandes à lancer côté cluster.
 
+> **État staging (2026-06-09)** : étapes 1–3 **faites** — `OPENMULTI_METRICS_TOKEN` posé dans
+> le secret + référencé dans l'env du déploiement ; `/metrics` rend 401 sans token, 200 avec
+> (OM-03 fermé). Reste l'étape 4 (scrape) : **aucun Prometheus déployé** → N/A pour l'instant.
+
 ## État de départ
 
 - `/metrics` est protégé par `metricsAuth` : **tant que `OPENMULTI_METRICS_TOKEN` n'est
@@ -23,14 +27,37 @@ kubectl -n openmulti-staging patch secret openmulti-secrets --type merge \
 echo "Token (a donner au scraper, ne pas logger ailleurs): $TOKEN"
 ```
 
-## 2. Activer (rollout pour relire le secret)
+## 2. Référencer la clé dans l'env du déploiement
+
+> ⚠️ **Indispensable.** La CI ne fait que `kubectl set image` — elle ne ré-applique
+> **jamais** `deploy/staging.yaml`. Un ajout d'env dans le manifeste (ici
+> `OPENMULTI_METRICS_TOKEN`) n'atteint donc le pod **que** par une action admin manuelle.
+> Sans ça, `/metrics` reste en fallback (toute clé appelante le lit) et le token est ignoré.
+
+Patch chirurgical (préserve le sha de l'image et les autres env ; déclenche le rollout) :
 
 ```bash
-kubectl -n openmulti-staging rollout restart deployment/openmulti
+kubectl -n openmulti-staging patch deployment openmulti --type strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"openmulti","env":[{"name":"OPENMULTI_METRICS_TOKEN","valueFrom":{"secretKeyRef":{"name":"openmulti-secrets","key":"OPENMULTI_METRICS_TOKEN","optional":true}}}]}]}}}}'
 kubectl -n openmulti-staging rollout status deployment/openmulti --timeout=120s
 ```
 
-## 3. Vérifier (depuis un pod déjà autorisé : multi-app)
+> Alternative : `kubectl apply -f deploy/staging.yaml` (réconcilie tout le manifeste) **mais**
+> il repasse l'image à `:latest` — re-pinner ensuite au sha avec `kubectl set image`.
+
+## 3. Vérifier
+
+Option admin (port-forward, indépendant de la NetworkPolicy et du tooling du pod) :
+
+```bash
+TOKEN=$(kubectl -n openmulti-staging get secret openmulti-secrets -o jsonpath='{.data.OPENMULTI_METRICS_TOKEN}' | base64 -d)
+kubectl -n openmulti-staging port-forward deploy/openmulti 18080:8080 >/dev/null 2>&1 &
+sleep 3
+curl -s -o /dev/null -w 'sans token   -> %{http_code}\n' http://127.0.0.1:18080/metrics            # 401
+curl -s -o /dev/null -w 'avec token   -> %{http_code}\n' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/metrics  # 200
+kill %1
+```
+
+Option depuis un pod déjà autorisé (multi-app) :
 
 ```bash
 POD=$(kubectl -n multi-staging get pods -l app=multi-app -o name | head -1)

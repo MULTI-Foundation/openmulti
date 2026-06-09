@@ -6,6 +6,12 @@
 # rollout via un ServiceAccount scope a `openmulti-staging` (secret STAGING_KUBECONFIG).
 # Ce SA ne peut PAS toucher multi-staging ni la prod (Role namespace, verifie).
 #
+# ⚠️ La CI fait UNIQUEMENT `set image` — elle ne re-applique JAMAIS ce manifeste (le SA
+# scope n'a pas les droits sur Service/NetworkPolicy/RBAC). Tout changement ici (env,
+# securityContext, NetworkPolicy...) doit etre applique MANUELLEMENT par un admin:
+# `kubectl apply -f deploy/staging.yaml` (repasse l'image a :latest -> re-pinner au sha)
+# ou un `kubectl patch` chirurgical. Cf docs/OBSERVABILITY-SETUP.md (etape 2).
+#
 # Bootstrap one-shot (deja fait, secrets crees hors manifeste pour ne pas versionner
 # de valeurs):
 #   kubectl create namespace openmulti-staging
