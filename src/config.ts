@@ -26,6 +26,14 @@ export const config = {
   // Default selection strategy among a tier's candidates. 'default' = first candidate
   // (iso-comportement). Per-request override via openmulti.route. See select.ts.
   defaultRoute: (process.env.OPENMULTI_DEFAULT_ROUTE === 'smart' ? 'smart' : 'default') as 'default' | 'smart',
+  // OM-02: reject a request whose declared Content-Length exceeds this (bytes). The
+  // 8 MiB default is a safety net far above realistic proxy traffic; tune as needed.
+  maxBodyBytes: Math.max(0, Number(process.env.OPENMULTI_MAX_BODY_BYTES ?? 8_388_608)),
+  // OM-01: per-key request rate limit over a 60s window. 0 = disabled (default).
+  rateLimitPerMin: Math.max(0, Number(process.env.OPENMULTI_RATE_LIMIT_PER_MIN ?? 0)),
+  // OM-03: dedicated ops token for GET /metrics. Empty = fall back to caller-key auth
+  // (current behavior). Set it in any deployed env to stop cross-tenant metric reads.
+  metricsToken: process.env.OPENMULTI_METRICS_TOKEN || '',
 }
 
 // Fail closed: an empty allowlist leaves every /v1 route open (see auth.ts). That's
