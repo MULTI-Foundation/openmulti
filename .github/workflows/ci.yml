@@ -8,6 +8,9 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE: ${{ github.repository }}
+  # Les actions (checkout@v4, docker/*, azure/setup-kubectl@v4) tournent encore sur Node 20,
+  # forcees en Node 24 le 2026-06-16. On opte maintenant pour valider la compat en avance.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
