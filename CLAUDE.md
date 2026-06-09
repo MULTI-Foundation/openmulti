@@ -25,6 +25,11 @@ pour une capacité du bloc A (ex. la génération d'image passe par `modalities`
 confronte à `docs/ARCHITECTURE.md`, et dans le doute demande. En cas de gap réel, le boucher
 (et le verrouiller par un test de contrat) plutôt que d'effacer le marqueur.
 
+## Commits : pas de co-signature
+
+Le mainteneur ne veut **aucune co-signature Claude** sur les commits. Ne **jamais** ajouter de
+trailer `Co-Authored-By: Claude …` (ni mention équivalente) aux messages de commit.
+
 ## What this is
 
 OpenMulti is an OpenAI-compatible HTTP gateway (TypeScript / Hono) that turns a caller's
