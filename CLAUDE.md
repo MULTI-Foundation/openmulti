@@ -143,8 +143,13 @@ Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression
 - **/metrics ops token** (`OPENMULTI_METRICS_TOKEN`) — `metricsAuth` requires it (constant-time)
   when set, else falls back to caller-key auth. Stops cross-tenant metric reads.
 
-Open findings (not yet fixed): OM-04 (caller-key timing), OM-05 (`model`/`purpose` reflected into
-response headers), OM-06..10 — see the audit doc.
+- **Constant-time auth** (`auth.ts` `safeEqual`) — caller keys and the metrics token are compared
+  in constant time, no short-circuit on the matching key (OM-04).
+- **Header sanitization** (`sanitize.ts` `headerSafe`) — `X-OpenMulti-*` response headers strip
+  CR/LF + control chars, so a caller-pinned model / echoed purpose can't inject headers (OM-05).
+
+Open findings (not yet fixed): OM-06..10 (request field pass-through, error pass-through, version
+in `/health`, image-by-tag, no graceful shutdown) — see the audit doc.
 
 ## Conventions
 

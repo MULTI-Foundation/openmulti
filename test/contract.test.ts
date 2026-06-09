@@ -141,6 +141,23 @@ test('streaming: reponse SSE OpenAI passee en pass-through', async () => {
   assert.match(text, /\[DONE\]/)
 })
 
+test('securite: un model avec CRLF ne peut pas injecter d en-tete (OM-05)', async () => {
+  globalThis.fetch = (async () => {
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        c.close()
+      },
+    })
+    return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  }) as any
+  // model concret (contient '/') porteur d'une tentative d'injection CRLF.
+  const res = await post({ model: 'evil/x\r\nX-Injected: 1', stream: true, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('x-injected'), null) // pas d'en-tete injecte
+  assert.doesNotMatch(res.headers.get('x-openmulti-model') || '', /[\r\n]/)
+})
+
 test('streaming: annuler la reponse (client deconnecte) abort l upstream', async () => {
   let captured: AbortSignal | null = null
   globalThis.fetch = (async (_url: any, init: any) => {

@@ -22,8 +22,12 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
   const key = header.slice(7)
 
   // Empty allowlist = open (dev only). In any deployed env, set OPENMULTI_API_KEYS.
-  if (config.apiKeys.length > 0 && !config.apiKeys.includes(key)) {
-    return c.json({ error: { message: 'Invalid API key', type: 'auth_error' } }, 401)
+  // OM-04: constant-time compare, and don't short-circuit on the matching key, so
+  // neither the key content nor which key matched leaks through response timing.
+  if (config.apiKeys.length > 0) {
+    let ok = false
+    for (const allowed of config.apiKeys) if (safeEqual(key, allowed)) ok = true
+    if (!ok) return c.json({ error: { message: 'Invalid API key', type: 'auth_error' } }, 401)
   }
 
   c.set('apiKey', key)
