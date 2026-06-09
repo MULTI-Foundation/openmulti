@@ -70,45 +70,38 @@ kubectl -n multi-staging exec "$POD" -- sh -c \
 kubectl -n multi-staging exec "$POD" -- sh -c "curl -s -o /dev/null -w '%{http_code}\n' $URL"
 ```
 
-## 4. Scrape Prometheus
+## 4. Stack Prometheus + Grafana (légère, déjà déployée)
 
-### 4a. Autoriser le réseau (adapter au ns/labels de ton Prometheus)
+Une stack mono-pod prête à l'emploi vit dans **`deploy/monitoring.yaml`** (ns `monitoring`) :
+Prometheus scrape `/metrics` avec le token ops, Grafana avec datasource + dashboard
+« OpenMulti » provisionnés. **Déployée en staging le 2026-06-09** (scrape `up=1` vérifié).
 
-```yaml
-# allow-from-prometheus.yaml — kubectl apply -f
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: allow-from-prometheus, namespace: openmulti-staging }
-spec:
-  podSelector: { matchLabels: { app: openmulti } }
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
-      ports: [{ port: 8080, protocol: TCP }]
+Re-déploiement / reproduction (le bootstrap des secrets est dans l'en-tête du manifeste) :
+
+```bash
+TOK=$(kubectl -n openmulti-staging get secret openmulti-secrets -o jsonpath='{.data.OPENMULTI_METRICS_TOKEN}' | base64 -d)
+kubectl create ns monitoring
+kubectl -n monitoring create secret generic openmulti-scrape --from-literal=token="$TOK"
+kubectl -n monitoring create secret generic grafana-admin --from-literal=password="$(openssl rand -hex 16)"
+kubectl apply -f deploy/monitoring.yaml
 ```
 
-### 4b. Job de scrape (Prometheus k8s SD + bearer depuis un secret)
+> La NetworkPolicy `allow-from-monitoring` (dans le manifeste) autorise le pod Prometheus à
+> scraper `openmulti:8080` malgré le `default-deny`.
 
-```yaml
-# Dans la config Prometheus. Le token va dans un secret monte -> credentials_file.
-- job_name: openmulti-staging
-  metrics_path: /metrics
-  scheme: http
-  authorization:
-    type: Bearer
-    credentials_file: /etc/prometheus/secrets/openmulti/OPENMULTI_METRICS_TOKEN
-  kubernetes_sd_configs:
-    - role: endpoints
-      namespaces: { names: [openmulti-staging] }
-  relabel_configs:
-    - source_labels: [__meta_kubernetes_service_name]
-      regex: openmulti
-      action: keep
-    - source_labels: [__meta_kubernetes_endpoint_port_name]
-      regex: http
-      action: keep
+### Accès
+
+```bash
+# Grafana (dashboard "OpenMulti" auto-chargé). Login admin / <secret>.
+kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.password}' | base64 -d; echo
+kubectl -n monitoring port-forward svc/grafana 3000:3000   # -> http://127.0.0.1:3000
+# Prometheus (cibles / requêtes brutes)
+kubectl -n monitoring port-forward svc/prometheus 9090:9090 # -> http://127.0.0.1:9090
 ```
+
+> Les séries restent **vides tant qu'openmulti ne reçoit pas de trafic** (il n'est nourri que
+> par MyMULTI quand `OPENMULTI_ENABLED=true`). La cible est `up` immédiatement ; les courbes se
+> remplissent dès les premiers appels. Données Prometheus **éphémères** (emptyDir, rétention 3j).
 
 > Alternative prometheus-operator : un `ServiceMonitor` (ajouter d'abord un label au
 > Service `openmulti` pour le sélecteur, + un `bearerTokenSecret` pointant la clé
