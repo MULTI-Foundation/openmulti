@@ -11,7 +11,9 @@ import type { AppEnv } from './types.js'
 
 export const app = new Hono<AppEnv>()
 
-app.get('/health', (c) => c.json({ status: 'ok', service: 'openmulti', version: '0.0.1' }))
+// OM-08: no version in the public health body (avoids fingerprinting). k8s probes
+// only check the status code; nothing depends on the body.
+app.get('/health', (c) => c.json({ status: 'ok', service: 'openmulti' }))
 
 // Prometheus metrics. metricsAuth requires a dedicated ops token when configured
 // (OPENMULTI_METRICS_TOKEN), else falls back to caller-key auth (see OM-03).

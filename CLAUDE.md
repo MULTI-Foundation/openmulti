@@ -148,8 +148,13 @@ Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression
 - **Header sanitization** (`sanitize.ts` `headerSafe`) — `X-OpenMulti-*` response headers strip
   CR/LF + control chars, so a caller-pinned model / echoed purpose can't inject headers (OM-05).
 
-Open findings (not yet fixed): OM-06..10 (request field pass-through, error pass-through, version
-in `/health`, image-by-tag, no graceful shutdown) — see the audit doc.
+- **Graceful shutdown** (`shutdown.ts` `makeShutdown`, wired in `index.ts`) — SIGTERM/SIGINT drain
+  in-flight requests/streams then exit, with a timeout guard (OM-10). `/health` no longer leaks the
+  version (OM-08).
+
+Deferred findings (all Low, resolution documented in the audit, to do **before public exposure**):
+OM-06 (request-field pass-through → allowlist), OM-07 (upstream error pass-through → normalize),
+OM-09 (pin base image by digest + sign). Nothing is left open without a decision.
 
 ## Conventions
 
