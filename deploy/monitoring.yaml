@@ -40,6 +40,7 @@ kind: Deployment
 metadata: { name: prometheus, namespace: monitoring, labels: { app: prometheus } }
 spec:
   replicas: 1
+  strategy: { type: Recreate } # PVC RWO: ne pas tenter 2 pods en parallele au rollout
   selector: { matchLabels: { app: prometheus } }
   template:
     metadata: { labels: { app: prometheus } }
@@ -51,7 +52,7 @@ spec:
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
-            - --storage.tsdb.retention.time=3d
+            - --storage.tsdb.retention.time=35d # couvre le mois courant
           ports: [{ containerPort: 9090, name: http }]
           volumeMounts:
             - { name: config, mountPath: /etc/prometheus }
@@ -64,9 +65,18 @@ spec:
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
       volumes:
         - { name: config, configMap: { name: prometheus-config } }
-        - { name: data, emptyDir: {} }
+        - name: data
+          persistentVolumeClaim: { claimName: prometheus-data }
         - name: scrape-token
           secret: { secretName: openmulti-scrape, items: [{ key: token, path: token }] }
+---
+# Stockage persistant (k3s local-path par defaut) -> l'historique survit aux restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: prometheus-data, namespace: monitoring }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: v1
 kind: Service
@@ -122,7 +132,21 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
-          "targets": [ { "expr": "sum by (model) (rate(openmulti_request_duration_ms_sum[5m])) / clamp_min(sum by (model) (rate(openmulti_request_duration_ms_count[5m])), 1)", "legendFormat": "{{model}}" } ] }
+          "targets": [ { "expr": "sum by (model) (rate(openmulti_request_duration_ms_sum[5m])) / clamp_min(sum by (model) (rate(openmulti_request_duration_ms_count[5m])), 1)", "legendFormat": "{{model}}" } ] },
+        { "id": 5, "title": "Coût par projet (24h / 30j)", "type": "table",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 } },
+          "targets": [
+            { "refId": "A", "expr": "sum by (key) (increase(openmulti_cost_usd_total[24h]))", "format": "table", "instant": true },
+            { "refId": "B", "expr": "sum by (key) (increase(openmulti_cost_usd_total[30d]))", "format": "table", "instant": true }
+          ],
+          "transformations": [
+            { "id": "merge", "options": {} },
+            { "id": "organize", "options": {
+              "excludeByName": { "Time": true },
+              "renameByName": { "key": "Projet", "Value #A": "Coût 24h ($)", "Value #B": "Coût 30j ($)" } } }
+          ] }
       ]
     }
 ---
