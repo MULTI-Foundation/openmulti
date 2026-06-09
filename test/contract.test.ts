@@ -110,6 +110,14 @@ test('4e. l extension openmulti n est jamais transmise a l upstream', async () =
   assert.equal(lastBody.openmulti, undefined)
 })
 
+test('securite: /health ne divulgue pas la version (OM-08)', async () => {
+  const res = await app.fetch(new Request('http://test/health'))
+  assert.equal(res.status, 200)
+  const j = await res.json()
+  assert.equal(j.status, 'ok')
+  assert.equal(j.version, undefined)
+})
+
 test('5a. 401 sans bearer', async () => {
   const res = await post({ model: 'auto', messages: [] }, null)
   assert.equal(res.status, 401)

@@ -31,11 +31,11 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 | OM-03 | Moyenne / Moyenne | `/metrics` lisible par **n'importe quelle** clé appelante → fuite cross-tenant de métriques business | **Corrigé (opt-in)** |
 | OM-04 | Moyenne / Faible | Comparaison de clé API non constante en temps (timing attack) | **Corrigé** |
 | OM-05 | Moyenne / Faible | Entrée appelante (`model`, `purpose`) reflétée non-sanitisée dans les en-têtes de réponse (injection d'en-tête / CRLF) | **Corrigé** |
-| OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | Ouvert |
-| OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | Ouvert |
-| OM-08 | Faible / Faible | `/health` non authentifié divulgue la version (fingerprinting) | Ouvert |
-| OM-09 | Faible / Faible | Image référencée par tag (`:latest`) et non par digest (immutabilité supply-chain) | Ouvert |
-| OM-10 | Info / Info | Pas d'arrêt gracieux (SIGTERM) — flux en cours coupés au rollout (disponibilité) | Ouvert |
+| OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | Différé (avant exposition publique) |
+| OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | Différé (avant exposition publique) |
+| OM-08 | Faible / Faible | `/health` non authentifié divulgue la version (fingerprinting) | **Corrigé** |
+| OM-09 | Faible / Faible | Image référencée par tag (`:latest`) et non par digest (immutabilité supply-chain) | Différé (digest à figer côté ops) |
+| OM-10 | Info / Info | Pas d'arrêt gracieux (SIGTERM) — flux en cours coupés au rollout (disponibilité) | **Corrigé** |
 
 > **Mise à jour 2026-06-09** — OM-01/02/03 corrigés (branche `fix/security-hardening-om-01-02-03`),
 > tous opt-in (défaut = comportement actuel), chacun avec ses tests (`test/security-hardening.test.ts`) :
@@ -49,6 +49,21 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 > sanitisation des en-têtes `X-OpenMulti-*` (`headerSafe` retire CR/LF + contrôles, cap 256) — choix
 > de nettoyer en sortie plutôt que rejeter en entrée, pour ne casser aucune requête valide. Tests :
 > `test/sanitize.test.ts` + cas d'intégration CRLF dans `contract.test.ts`.
+>
+> **Mise à jour 2026-06-09 (closeout)** — OM-08/10 corrigés (branche `fix/security-audit-closeout`) :
+> `/health` ne renvoie plus la version ; arrêt gracieux SIGTERM/SIGINT (`src/shutdown.ts`, drain +
+> timeout de garde, testé). **OM-06/07/09 différés sciemment** (tous Faible) car un correctif code
+> porterait un risque de régression non maîtrisé sans le profil réel de MyMULTI :
+> - **OM-06** : passer le pass-through total à une allowlist de champs risque de casser des appels
+>   MyMULTI. À faire **avant l'exposition publique** (allowlister les champs OpenAI/OpenRouter supportés).
+> - **OM-07** : normaliser les erreurs upstream change le corps que MyMULTI peut parser (softFail).
+>   À normaliser **avant l'exposition publique**, en coordination avec MyMULTI.
+> - **OM-09** : figer l'image de base par digest (`node:22-alpine@sha256:…`) + signature (cosign) —
+>   opération ops (résolution du digest hors de ce repo). Les workloads tournent déjà épinglés au sha
+>   par la CI ; reste l'image de base.
+>
+> Bilan : **7/10 corrigés** (OM-01..05, 08, 10), **3 différés** (OM-06/07/09, tous Faible) avec
+> résolution documentée pour l'avant-public. Aucun finding ouvert sans décision.
 
 ---
 
