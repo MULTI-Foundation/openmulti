@@ -9,6 +9,7 @@
 
 import { config } from '../config.js'
 import type { ChatRequest } from '../types.js'
+import type { Provider, UpstreamCall } from './types.js'
 
 /**
  * Mutate the outgoing body: set the resolved model + apply steering. Returns the
@@ -53,11 +54,6 @@ export function isRetryableStatus(status: number): boolean {
   return RETRYABLE_STATUS.has(status)
 }
 
-export interface UpstreamCall {
-  response: Response
-  abort: AbortController
-}
-
 /** POST to the upstream provider with a 30s connect timeout. Throws on network error. */
 export async function callUpstream(body: Record<string, unknown>): Promise<UpstreamCall> {
   const abort = new AbortController()
@@ -81,4 +77,16 @@ export async function callUpstream(body: Record<string, unknown>): Promise<Upstr
   }
 
   return { response, abort }
+}
+
+/** The OpenRouter access path, behind the Provider seam. The functions above ARE the
+ * v0 behavior, moved 1:1 — and OpenRouter already reports usage.cost and speaks the
+ * OpenAI shape, so normalization is the identity (contract: byte-identical response
+ * when the caller didn't send the openmulti extension). */
+export const openRouterProvider: Provider = {
+  name: 'openrouter',
+  buildBody: buildUpstreamBody,
+  call: callUpstream,
+  isRetryable: isRetryableStatus,
+  normalizeResponse: (data) => data,
 }

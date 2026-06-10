@@ -70,10 +70,11 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
 1. **`route(req)`** (`src/router.ts`) → `{ model, reason }`. Precedence: `openmulti.allow` (hard
    pin to first allowed) > a concrete `provider/model` id passed as `model` (honored as-is) >
    `tier` (from `openmulti.tier`, the `auto:<tier>` alias, or `DEFAULT_TIER`), refined by `purpose`.
-2. **`buildUpstreamBody(req, model)`** (`src/providers/openrouter.ts`) → strips the `openmulti`
-   block (provider must never see it), sets the resolved model, applies the **iso-comportement
-   steering** (see below).
-3. **`callUpstream(body)`** → POST to OpenRouter with a 30s connect timeout.
+2. **`providerFor(model)`** (`src/providers/index.ts`) → the `Provider` carrying the call
+   (the multi-provider seam, `docs/MULTI-PROVIDER-SPEC.md`; v0: always OpenRouter). Then
+   **`provider.buildBody(req, model)`** → strips the `openmulti` block (provider must never see
+   it), sets the resolved model, applies that provider's **iso-comportement steering** (see below).
+3. **`provider.call(body)`** → POST to the provider with a 30s connect timeout.
 4. Pipe back. **Streaming**: SSE is passed through *untouched* (so the caller's own usage parsing
    keeps working) with a 60s inter-chunk watchdog that aborts a stalled upstream; route decision is
    surfaced via `X-OpenMulti-*` headers. **Non-stream**: the `openmulti.reason` block is attached
