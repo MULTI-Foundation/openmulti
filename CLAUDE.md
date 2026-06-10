@@ -88,11 +88,17 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   (full set) > singular `OPENMULTI_MODEL_[PURPOSE_]TIER` (back-compat) > built-in default. Changing
   "which model is economy/balanced/quality" happens here, and *no consuming project changes a line*.
 - **`src/select.ts`** — picks one candidate (the v1 "intelligence" seam). `default` returns the
-  first candidate (= iso, the contract-locked behavior); `smart` is a deterministic
-  explore-then-exploit over the metrics registry (fill to `MIN_SAMPLES`, then cheapest healthy,
-  ties → primary). **Opt-in**: `smart` only runs when a caller sends `openmulti.route: 'smart'` or
-  `OPENMULTI_DEFAULT_ROUTE=smart`. With a single candidate, `smart` ≡ `default`. A real bandit
-  (exploration/decay) is the next increment — this is the seam for it.
+  first candidate (= iso, the contract-locked behavior); `smart` is a deterministic **discounted
+  bandit** (no RNG) over the metrics registry: observed stats decay per observation
+  (`OPENMULTI_SMART_DECAY_WINDOW`, horizon in requests, default 200), and one rule — "decayed
+  sample count < `MIN_SAMPLES` → explore the least-sampled" — covers both cold-start fill and
+  continuous re-sampling of losers (~`MIN_SAMPLES/WINDOW` of traffic each, so data stays fresh and
+  a degraded model can recover). Exploit = cheapest healthy by decayed cost/req, ties → primary.
+  `WINDOW=0` reverts to lifetime stats (explore once, exploit forever — locked by
+  `test/select.test.ts`; the bandit by `test/bandit.test.ts`). **Opt-in**: `smart` only runs when a
+  caller sends `openmulti.route: 'smart'` or `OPENMULTI_DEFAULT_ROUTE=smart`. With a single
+  candidate, `smart` ≡ `default`. The bandit view in `metrics.ts` is separate from the Prometheus
+  counters, which stay monotonic.
 - **`src/providers/openrouter.ts` → `buildUpstreamBody`** — the steering ported 1:1 from MyMULTI:
   force `usage.include: true` (cost in the final chunk), `provider.sort: 'throughput'`, and a
   `max_tokens` floor of 32000 for the `moonshotai/kimi-k2*` family when unset (Moonshot's 8192
