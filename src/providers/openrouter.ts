@@ -8,8 +8,11 @@
 //   - 30s connect timeout (the inter-chunk watchdog lives in the route, tied to the reader)
 
 import { config } from '../config.js'
+import { isRetryableStatus } from './shared.js'
 import type { ChatRequest } from '../types.js'
 import type { Provider, UpstreamCall } from './types.js'
+
+export { isRetryableStatus }
 
 /**
  * Mutate the outgoing body: set the resolved model + apply steering. Returns the
@@ -43,15 +46,6 @@ export function buildUpstreamBody(
   body.provider = { ...(req.provider ?? {}), sort: 'throughput' }
 
   return body
-}
-
-// Transient upstream statuses worth retrying on the SAME model. 4xx (bad request,
-// auth, unprocessable) are deterministic — retrying won't help — except 429, which
-// is a rate-limit hiccup and honors Retry-After.
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
-
-export function isRetryableStatus(status: number): boolean {
-  return RETRYABLE_STATUS.has(status)
 }
 
 /** POST to the upstream provider with a 30s connect timeout. Throws on network error. */

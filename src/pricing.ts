@@ -21,8 +21,14 @@ export interface ModelPrice {
   outputPerMTok: number
 }
 
-// Rempli à l'étape 3 de la spec, provider par provider, prix vérifiés au câblage.
-const DEFAULTS: Record<string, ModelPrice> = {}
+// Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
+// moment-là contre la page du vendor (jamais de prix de mémoire).
+const DEFAULTS: Record<string, ModelPrice> = {
+  // Moonshot direct — vérifié le 2026-06-10 sur platform.kimi.ai/docs/pricing/chat-k26.
+  // Input = cache MISS ($0.95/MTok) : le cache hit ($0.16) n'est pas modélisé, le coût
+  // synthétisé est donc une borne haute côté input.
+  'moonshotai/kimi-k2.6': { inputPerMTok: 0.95, outputPerMTok: 4 },
+}
 
 export interface PricingParse {
   prices: Record<string, ModelPrice>

@@ -98,9 +98,15 @@ chat.post('/v1/chat/completions', async (c) => {
     return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
   }
 
-  // ── Streaming: pipe through untouched + inter-chunk watchdog ───────────────
+  // ── Streaming: pipe through + inter-chunk watchdog ─────────────────────────
+  // Passthrough byte-à-byte sur le chemin OpenRouter (pas d'adaptStream) ; un provider
+  // direct peut adapter le flux (injection du usage.cost synthétisé — le contrat
+  // « le caller parse son usage dans le dernier chunk » vaut aussi en stream).
   if (isStream && upstream.body) {
-    const reader = upstream.body.getReader()
+    const upstreamBody = provider.adaptStream
+      ? provider.adaptStream(upstream.body, decision.model)
+      : upstream.body
+    const reader = upstreamBody.getReader()
     const decoder = new TextDecoder()
     const scanner = new SseUsageScanner()
     let lastChunkAt = Date.now()

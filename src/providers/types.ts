@@ -30,4 +30,9 @@ export interface Provider {
    * MUST be the identity for OpenAI-shaped providers that already report cost
    * (the no-extension response is contractually byte-identical to the upstream). */
   normalizeResponse(data: Record<string, unknown>, model: string): Record<string, unknown>
+  /** Optional: adapt the upstream SSE byte stream before it is piped to the client.
+   * Absent = byte-for-byte passthrough (the OpenRouter path). Direct providers use it
+   * to keep the stream contract-equivalent (e.g. inject the synthesized usage.cost
+   * into the final usage chunk — coupling point #1 applies to streams too). */
+  adaptStream?(upstream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array>
 }

@@ -61,6 +61,15 @@ export function recordRetry(key: string, model: string): void {
   bucket(key, model).retries += 1
 }
 
+// Trous de tarif : un provider DIRECT a servi un modèle absent de pricing.ts, donc
+// usage.cost n'a pas pu être synthétisé (spec multi-provider §5 : jamais un faux
+// zéro, mais le trou doit rester visible — c'est un prix à ajouter, pas un détail).
+const pricingMisses = new Map<string, number>()
+
+export function recordPricingMiss(model: string): void {
+  pricingMisses.set(model, (pricingMisses.get(model) ?? 0) + 1)
+}
+
 export interface ModelAggregate {
   requests: number
   errors: number
@@ -175,6 +184,12 @@ export function renderProm(): string {
     line('openmulti_request_duration_ms_count', `key="${esc(key)}",model="${esc(model)}"`, s.durationCount)
   }
 
+  out.push('# HELP openmulti_pricing_miss_total Direct-provider responses whose cost could not be synthesized (model missing from pricing.ts).')
+  out.push('# TYPE openmulti_pricing_miss_total counter')
+  for (const [model, n] of pricingMisses) {
+    line('openmulti_pricing_miss_total', `model="${esc(model)}"`, n)
+  }
+
   return out.join('\n') + '\n'
 }
 
@@ -182,4 +197,5 @@ export function renderProm(): string {
 export function _resetMetrics(): void {
   stats.clear()
   bandit.clear()
+  pricingMisses.clear()
 }

@@ -71,15 +71,24 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
    pin to first allowed) > a concrete `provider/model` id passed as `model` (honored as-is) >
    `tier` (from `openmulti.tier`, the `auto:<tier>` alias, or `DEFAULT_TIER`), refined by `purpose`.
 2. **`providerFor(model)`** (`src/providers/index.ts`) → the `Provider` carrying the call
-   (the multi-provider seam, `docs/MULTI-PROVIDER-SPEC.md`; v0: always OpenRouter). Then
-   **`provider.buildBody(req, model)`** → strips the `openmulti` block (provider must never see
-   it), sets the resolved model, applies that provider's **iso-comportement steering** (see below).
+   (the multi-provider seam, `docs/MULTI-PROVIDER-SPEC.md`). Default: OpenRouter for everything.
+   A vendor's models go **direct** only when `OPENMULTI_PROVIDER_<VENDOR>=direct` AND its API key
+   is set (today: Moonshot, `src/providers/moonshot.ts`) — missing key = silent OpenRouter fallback.
+   Then **`provider.buildBody(req, model)`** → strips the `openmulti` block (provider must never see
+   it), sets the resolved model (Moonshot: vendor prefix stripped, `kimi-k2.6`), applies that
+   provider's **own steering** (see below) — OpenRouter-isms (`usage.include`, `provider.sort`)
+   never leak to a direct provider.
 3. **`provider.call(body)`** → POST to the provider with a 30s connect timeout.
-4. Pipe back. **Streaming**: SSE is passed through *untouched* (so the caller's own usage parsing
-   keeps working) with a 60s inter-chunk watchdog that aborts a stalled upstream; route decision is
-   surfaced via `X-OpenMulti-*` headers. **Non-stream**: the `openmulti.reason` block is attached
-   **only if the caller sent an `openmulti` extension** — otherwise the response stays byte-identical
-   to the upstream, so a plain OpenAI client sees no extra field.
+4. Pipe back. **Streaming**: on the OpenRouter path SSE is passed through *untouched* (so the
+   caller's own usage parsing keeps working); a direct provider may adapt the stream via
+   `provider.adaptStream` (Moonshot: injects the synthesized `usage.cost` into the final usage
+   chunk — coupling point #1 applies to streams too; everything else passes verbatim). 60s
+   inter-chunk watchdog aborts a stalled upstream; route decision is surfaced via `X-OpenMulti-*`
+   headers. **Non-stream**: `provider.normalizeResponse` (identity on OpenRouter; Moonshot
+   synthesizes `usage.cost` from `src/pricing.ts` — unknown model = no cost + warning +
+   `openmulti_pricing_miss_total`, never a fake zero). The `openmulti.reason` block is attached
+   **only if the caller sent an `openmulti` extension** — otherwise the response stays
+   byte-identical to the upstream, so a plain OpenAI client sees no extra field.
 
 ## Two files hold the only knobs that matter
 

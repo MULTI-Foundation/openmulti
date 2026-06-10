@@ -1,9 +1,11 @@
 // Unit tests for the SSE usage scanner — the boundary case that motivated isolating
 // it: a `data:` event split across two chunk reads must still be parsed once complete.
+// Also covers injectCostIntoSseData, the pure half of the direct-provider stream
+// adaptation (cost synthesis into the usage chunk).
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SseUsageScanner } from '../src/sse.ts'
+import { SseUsageScanner, injectCostIntoSseData } from '../src/sse.ts'
 
 test('parse usage et provider sur des lignes completes', () => {
   const s = new SseUsageScanner()
@@ -31,4 +33,23 @@ test('[DONE] et lignes non-data sont ignores sans casser', () => {
   s.push('data: [DONE]\n')
   assert.equal(s.usage, null)
   assert.equal(s.provider, null)
+})
+
+test('injectCost: enrichit uniquement l\'event usage sans cost, laisse tout le reste', () => {
+  const cb = () => 2.5
+  // injecte la ou il faut
+  const out = injectCostIntoSseData('data: {"usage":{"prompt_tokens":10,"completion_tokens":5}}', cb)
+  assert.ok(out)
+  assert.equal(JSON.parse(out.slice(6)).usage.cost, 2.5)
+  // ne touche a rien d'autre : delta, [DONE], commentaire, cost deja present, JSON invalide
+  assert.equal(injectCostIntoSseData('data: {"choices":[{"delta":{"content":"hi"}}]}', cb), null)
+  assert.equal(injectCostIntoSseData('data: [DONE]', cb), null)
+  assert.equal(injectCostIntoSseData(': keep-alive', cb), null)
+  assert.equal(injectCostIntoSseData('data: {"usage":{"cost":0.01}}', cb), null)
+  assert.equal(injectCostIntoSseData('data: {oops', cb), null)
+})
+
+test('injectCost: modele non tarife (callback undefined) -> ligne inchangee, pas de faux zero', () => {
+  const out = injectCostIntoSseData('data: {"usage":{"prompt_tokens":10,"completion_tokens":5}}', () => undefined)
+  assert.equal(out, null)
 })
