@@ -67,20 +67,26 @@ export interface ModelAggregate {
   costUsd: number
 }
 
-/** Observed totals for one model, summed across every calling project. Feeds the
- * 'smart' selection strategy (see select.ts). */
+// --- Vue « bandit » (stats amorties), nourrit la stratégie 'smart' de select.ts ---
+//
+// Séparée des compteurs Prometheus ci-dessus, qui doivent rester MONOTONES : ici,
+// à chaque observation, TOUTES les entrées sont multipliées par RHO avant d'ajouter
+// la nouvelle (discounted bandit). Effets :
+//   - le récent pèse plus que l'ancien (un modèle dégradé/réparé est vu vite) ;
+//   - le décompte amorti d'un modèle délaissé glisse vers 0, ce qui re-déclenche
+//     l'exploration côté select.ts (refresh continu, ~MIN_SAMPLES/WINDOW du trafic).
+// OPENMULTI_SMART_DECAY_WINDOW est l'horizon effectif en nombre de requêtes
+// (RHO = 1 - 1/window) ; 0 = pas d'amortissement (stats à vie, comportement legacy).
+const DECAY_WINDOW = Math.max(0, Number(process.env.OPENMULTI_SMART_DECAY_WINDOW ?? 200))
+const RHO = DECAY_WINDOW > 0 ? 1 - 1 / DECAY_WINDOW : 1
+
+const bandit = new Map<string, ModelAggregate>()
+
+/** Stats amorties d'un modèle, tous projets confondus (vue de sélection, pas de
+ * facturation — les compteurs exposés sur /metrics ne décroissent jamais). */
 export function modelAggregate(model: string): ModelAggregate {
-  let requests = 0
-  let errors = 0
-  let costUsd = 0
-  for (const [id, s] of stats) {
-    if (id.slice(id.indexOf(SEP) + 1) === model) {
-      requests += s.requests
-      errors += s.errors
-      costUsd += s.costUsd
-    }
-  }
-  return { requests, errors, costUsd }
+  const b = bandit.get(model)
+  return b ? { ...b } : { requests: 0, errors: 0, costUsd: 0 }
 }
 
 export function recordRequest(r: RequestRecord): void {
@@ -94,6 +100,22 @@ export function recordRequest(r: RequestRecord): void {
     s.durationMsSum += r.durationMs
     s.durationCount += 1
   }
+
+  if (RHO < 1) {
+    for (const b of bandit.values()) {
+      b.requests *= RHO
+      b.errors *= RHO
+      b.costUsd *= RHO
+    }
+  }
+  let b = bandit.get(r.model)
+  if (!b) {
+    b = { requests: 0, errors: 0, costUsd: 0 }
+    bandit.set(r.model, b)
+  }
+  b.requests += 1
+  if (r.error) b.errors += 1
+  if (r.costUsd) b.costUsd += r.costUsd
 }
 
 function esc(v: string): string {
@@ -159,4 +181,5 @@ export function renderProm(): string {
 /** Test helper: wipe the registry between cases. */
 export function _resetMetrics(): void {
   stats.clear()
+  bandit.clear()
 }

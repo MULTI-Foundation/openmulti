@@ -1,12 +1,17 @@
 // Unit tests for the selection strategy. The catalog/contract are exercised in
 // contract.test.ts; here we drive selectModel directly with seeded metrics.
+// Ce fichier verrouille le mode SANS amortissement (DECAY_WINDOW=0 : stats à vie,
+// explore une fois puis exploite pour toujours) ; le bandit amorti — le défaut —
+// est verrouillé par test/bandit.test.ts (chaque fichier = un process node:test,
+// donc chacun peut figer ses env lus à l'import).
 
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 
-// Read at import time by select.ts — set low so tests stay short.
+// Read at import time by select.ts/metrics.ts — set low so tests stay short.
 process.env.OPENMULTI_SMART_MIN_SAMPLES = '2'
 process.env.OPENMULTI_SMART_MAX_ERROR_RATE = '0.2'
+process.env.OPENMULTI_SMART_DECAY_WINDOW = '0'
 
 const { selectModel } = await import('../src/select.ts')
 const { recordRequest, _resetMetrics } = await import('../src/metrics.ts')
