@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono'
 import { route } from '../router.js'
-import { buildUpstreamBody, callUpstream, isRetryableStatus } from '../providers/openrouter.js'
+import { providerFor } from '../providers/index.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel } from '../metrics.js'
@@ -49,7 +49,8 @@ chat.post('/v1/chat/completions', async (c) => {
   }
 
   const decision = route(req)
-  const body = buildUpstreamBody(req, decision.model, decision.maxTokensCeiling)
+  const provider = providerFor(decision.model)
+  const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
   const isStream = req.stream === true
 
   log.info('request', { key, model: decision.model, reason: decision.reason, stream: isStream, messages: req.messages.length })
@@ -58,11 +59,11 @@ chat.post('/v1/chat/completions', async (c) => {
   // hiccup (connect error, 429/5xx); we never switch models (that would change the
   // answer — cross-model fallback is v1). A retry only ever happens before any byte
   // reaches the client, so it is safe for both stream and non-stream.
-  let call!: Awaited<ReturnType<typeof callUpstream>>
+  let call!: Awaited<ReturnType<typeof provider.call>>
   let attempt = 0
   while (true) {
     try {
-      call = await callUpstream(body)
+      call = await provider.call(body)
     } catch (e) {
       const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
       if (attempt < config.maxRetries) {
@@ -77,7 +78,7 @@ chat.post('/v1/chat/completions', async (c) => {
       return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
     }
 
-    if (!call.response.ok && isRetryableStatus(call.response.status) && attempt < config.maxRetries) {
+    if (!call.response.ok && provider.isRetryable(call.response.status) && attempt < config.maxRetries) {
       attempt++
       const retryAfter = call.response.headers.get('retry-after')
       await call.response.body?.cancel().catch(() => {}) // drain the failed body
@@ -158,8 +159,9 @@ chat.post('/v1/chat/completions', async (c) => {
     })
   }
 
-  // ── Non-stream: parse, attach the route decision, return ───────────────────
-  const data = (await upstream.json()) as Record<string, unknown>
+  // ── Non-stream: parse, normalize (identity on the OpenRouter path), attach the
+  // route decision, return ─────────────────────────────────────────────────────
+  const data = provider.normalizeResponse((await upstream.json()) as Record<string, unknown>, decision.model)
   const u = data.usage as { prompt_tokens: number; completion_tokens: number; cost?: number } | undefined
   log.info('completed', {
     key, model: decision.model, stream: false,
