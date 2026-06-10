@@ -159,8 +159,9 @@ Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression
   version (OM-08).
 
 Deferred findings (all Low, resolution documented in the audit, to do **before public exposure**):
-OM-06 (request-field pass-through → allowlist), OM-07 (upstream error pass-through → normalize),
-OM-09 (pin base image by digest + sign). Nothing is left open without a decision.
+OM-06 (request-field pass-through → allowlist), OM-07 (upstream error pass-through → normalize).
+OM-09 is partially closed (base image pinned by digest in the Dockerfile, bump procedure in a
+comment there; cosign signing in CI remains). Nothing is left open without a decision.
 
 ## Conventions
 

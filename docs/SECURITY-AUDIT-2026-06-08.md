@@ -34,7 +34,7 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 | OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | Différé (avant exposition publique) |
 | OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | Différé (avant exposition publique) |
 | OM-08 | Faible / Faible | `/health` non authentifié divulgue la version (fingerprinting) | **Corrigé** |
-| OM-09 | Faible / Faible | Image référencée par tag (`:latest`) et non par digest (immutabilité supply-chain) | Différé (digest à figer côté ops) |
+| OM-09 | Faible / Faible | Image référencée par tag (`:latest`) et non par digest (immutabilité supply-chain) | **Corrigé en partie** (base épinglée par digest ; reste la signature) |
 | OM-10 | Info / Info | Pas d'arrêt gracieux (SIGTERM) — flux en cours coupés au rollout (disponibilité) | **Corrigé** |
 
 > **Mise à jour 2026-06-09** — OM-01/02/03 corrigés (branche `fix/security-hardening-om-01-02-03`),
@@ -64,6 +64,12 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 >
 > Bilan : **7/10 corrigés** (OM-01..05, 08, 10), **3 différés** (OM-06/07/09, tous Faible) avec
 > résolution documentée pour l'avant-public. Aucun finding ouvert sans décision.
+>
+> **Mise à jour 2026-06-10** — OM-09, partie repo : l'image de base est épinglée par digest
+> (`node:22-alpine@sha256:968df39a…`, manifest list multi-arch) dans le `Dockerfile`, avec la
+> procédure de bump en commentaire. Restent la signature/attestation (cosign en CI) et, côté
+> manifeste, le fait qu'un `kubectl apply` à froid tire `:latest` (mitigé : la CI re-pinne au
+> sha à chaque déploiement). OM-06/07 inchangés (avant exposition publique, avec MyMULTI).
 
 ---
 
