@@ -12,7 +12,7 @@
 import { Hono } from 'hono'
 import { config } from '../config.js'
 import { EMBEDDING_MODEL } from '../catalog.js'
-import { isRetryableStatus, backoff } from '../providers/shared.js'
+import { isRetryableStatus, backoff, pickAllowedFields, normalizedUpstreamError, ALLOWED_EMBEDDINGS_FIELDS } from '../providers/shared.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
@@ -44,7 +44,10 @@ embeddings.post('/v1/embeddings', async (c) => {
     return c.json({ error: { message: '`input` is required', type: 'invalid_request_error' } }, 400)
   }
 
-  const { openmulti, ...rest } = req as { openmulti?: unknown } & Record<string, unknown>
+  const openmulti = req.openmulti
+  // OM-06 : seuls les champs embeddings connus passent (model, input, dimensions,
+  // encoding_format, user) — openmulti strippé comme partout.
+  const rest = pickAllowedFields(req, ALLOWED_EMBEDDINGS_FIELDS)
   const model = typeof rest.model === 'string' && rest.model !== 'auto' ? rest.model : EMBEDDING_MODEL
   const body = { ...rest, model }
 
@@ -100,10 +103,11 @@ embeddings.post('/v1/embeddings', async (c) => {
   }
 
   if (!upstream.ok) {
-    const text = await upstream.text()
-    log.warn('embeddings_upstream_not_ok', { key, model, status: upstream.status })
+    // OM-07 : détail loggé serveur, schéma stable côté appelant, statut conservé.
+    const text = await upstream.text().catch(() => '')
+    log.warn('embeddings_upstream_not_ok', { key, model, status: upstream.status, upstreamBody: text.slice(0, 500) })
     record({ error: true, durationMs: Date.now() - startedAt })
-    return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
+    return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
   }
 
   const data = (await upstream.json()) as Record<string, unknown>

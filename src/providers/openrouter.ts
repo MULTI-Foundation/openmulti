@@ -8,7 +8,7 @@
 //   - 30s connect timeout (the inter-chunk watchdog lives in the route, tied to the reader)
 
 import { config } from '../config.js'
-import { isRetryableStatus } from './shared.js'
+import { isRetryableStatus, pickAllowedFields } from './shared.js'
 import type { ChatRequest } from '../types.js'
 import type { Provider, UpstreamCall } from './types.js'
 
@@ -16,15 +16,15 @@ export { isRetryableStatus }
 
 /**
  * Mutate the outgoing body: set the resolved model + apply steering. Returns the
- * body ready to send upstream. `req.openmulti` is stripped (provider must not see it).
+ * body ready to send upstream. `req.openmulti` is stripped (provider must not see it)
+ * and only allowlisted fields are forwarded (OM-06, cf shared.ts).
  */
 export function buildUpstreamBody(
   req: ChatRequest,
   resolvedModel: string,
   maxTokensCeiling?: number,
 ): Record<string, unknown> {
-  const { openmulti: _omit, ...rest } = req
-  const body: Record<string, unknown> = { ...rest, model: resolvedModel }
+  const body: Record<string, unknown> = { ...pickAllowedFields(req), model: resolvedModel }
 
   // Force cost reporting (OpenRouter contract).
   body.usage = { ...(req.usage ?? {}), include: true }

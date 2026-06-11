@@ -90,8 +90,11 @@ test('panne transitoire -> retry puis succes ; erreur deterministe relayee telle
   responses = [status(503, '{"error":"overloaded"}'), ok]
   assert.equal((await post({ model: 'auto', input: 'x' })).status, 200)
 
-  responses = [status(422, '{"error":{"message":"bad input"}}')]
+  // OM-07 : statut conserve, corps upstream jamais relaye (normalise)
+  responses = [status(422, '{"error":{"message":"bad input from provider xyz"}}')]
   const res = await post({ model: 'auto', input: 'x' })
   assert.equal(res.status, 422)
-  assert.match(await res.text(), /bad input/)
+  const j = await res.json()
+  assert.equal(j.error.type, 'upstream_rejected')
+  assert.doesNotMatch(JSON.stringify(j), /provider xyz/)
 })
