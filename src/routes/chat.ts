@@ -7,10 +7,10 @@
 
 import { Hono } from 'hono'
 import { route } from '../router.js'
-import { providerFor } from '../providers/index.js'
+import { pathsFor, type UpstreamCall } from '../providers/index.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
-import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
+import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
 import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight } from '../keys.js'
 import { SseUsageScanner } from '../sse.js'
@@ -63,15 +63,15 @@ chat.post('/v1/chat/completions', async (c) => {
   }
 
   const decision = route(req)
-  const provider = providerFor(decision.model)
-  // Trace le chemin d'accès quand il n'est pas celui par défaut (reason = texte libre
-  // de l'extension ; le chemin OpenRouter reste byte-identique à l'historique).
-  if (provider.name !== 'openrouter') decision.reason = `${decision.reason}, via ${provider.name}`
-  const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
+  // Chemins d'accès ordonnés : l'élu d'abord, puis les alternatives de fallback
+  // (même modèle — la réponse est préservée ; cf providers/index.ts pathsFor).
+  const paths = pathsFor(decision.model)
+  let provider = paths[0]!
   const isStream = req.stream === true
 
   // Une observation = deux écritures : Prometheus (monitoring, in-memory) et le
-  // metering durable (facturation, Redis, fire-and-forget — cf meter.ts).
+  // metering durable (facturation, Redis, fire-and-forget — cf meter.ts). `provider`
+  // est mutable : l'helper capture toujours le chemin courant/final.
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
     recordRequest(rec)
@@ -82,44 +82,80 @@ chat.post('/v1/chat/completions', async (c) => {
   log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })
 
   // Bounded retry on transient upstream failures, SAME model. We retry to ride out a
-  // hiccup (connect error, 429/5xx); we never switch models (that would change the
-  // answer — cross-model fallback is v1). A retry only ever happens before any byte
-  // reaches the client, so it is safe for both stream and non-stream.
-  let call!: Awaited<ReturnType<typeof provider.call>>
-  let attempt = 0
-  while (true) {
-    try {
-      call = await provider.call(body)
-    } catch (e) {
-      const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
-      if (attempt < config.maxRetries) {
-        attempt++
-        recordRetry(key, decision.model, provider.name)
-        log.warn('upstream_retry', { key, model: decision.model, attempt, reason })
-        await backoff(attempt)
-        continue
-      }
-      log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-      record({ error: true, durationMs: Date.now() - startedAt })
-      return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
-    }
+  // hiccup (connect error, 429/5xx); on the LAST retry of a path, if an alternate
+  // access path exists (incrément D), the request fails over — still the same model,
+  // so the answer is preserved (cross-MODEL fallback would change it: out of scope).
+  // Retries/fallbacks only ever happen before any byte reaches the client, so they
+  // are safe for both stream and non-stream.
+  let call!: UpstreamCall
+  let failedOver = false
 
-    if (!call.response.ok && provider.isRetryable(call.response.status) && attempt < config.maxRetries) {
-      attempt++
-      const retryAfter = call.response.headers.get('retry-after')
-      await call.response.body?.cancel().catch(() => {}) // drain the failed body
-      recordRetry(key, decision.model, provider.name)
-      log.warn('upstream_retry', { key, model: decision.model, attempt, status: call.response.status })
-      await backoff(attempt, retryAfter)
-      continue
+  // Bascule sur le chemin suivant : l'échec du chemin courant est observé (bandit +
+  // metering voient l'erreur, le chemin malade perd son élection) et compté.
+  const failOver = (next: (typeof paths)[number], why: string | number) => {
+    record({ error: true, durationMs: Date.now() - startedAt })
+    recordPathFallback(decision.model, provider.name, next.name)
+    log.warn('path_fallback', { key, model: decision.model, from: provider.name, to: next.name, why: String(why) })
+    failedOver = true
+  }
+
+  pathLoop: for (let p = 0; p < paths.length; p++) {
+    provider = paths[p]!
+    const next = paths[p + 1]
+    const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
+    let attempt = 0
+    while (true) {
+      try {
+        call = await provider.call(body)
+      } catch (e) {
+        const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
+        if (attempt < config.maxRetries) {
+          attempt++
+          recordRetry(key, decision.model, provider.name)
+          log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, reason })
+          await backoff(attempt)
+          continue
+        }
+        if (next) {
+          failOver(next, reason)
+          continue pathLoop
+        }
+        log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
+        record({ error: true, durationMs: Date.now() - startedAt })
+        return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
+      }
+
+      if (!call.response.ok && provider.isRetryable(call.response.status)) {
+        if (attempt < config.maxRetries) {
+          attempt++
+          const retryAfter = call.response.headers.get('retry-after')
+          await call.response.body?.cancel().catch(() => {}) // drain the failed body
+          recordRetry(key, decision.model, provider.name)
+          log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, status: call.response.status })
+          await backoff(attempt, retryAfter)
+          continue
+        }
+        if (next) {
+          await call.response.body?.cancel().catch(() => {})
+          failOver(next, call.response.status)
+          continue pathLoop
+        }
+      }
+      break pathLoop
     }
-    break
+  }
+
+  // Trace le chemin d'accès quand il n'est pas celui par défaut, ou qu'un fallback a
+  // eu lieu (reason = texte libre de l'extension ; le chemin OpenRouter nominal reste
+  // byte-identique à l'historique).
+  if (provider.name !== 'openrouter' || failedOver) {
+    decision.reason = `${decision.reason}, via ${provider.name}${failedOver ? ` (fallback from ${paths[0]!.name})` : ''}`
   }
 
   const upstream = call.response
   if (!upstream.ok) {
     const text = await upstream.text()
-    log.warn('upstream_not_ok', { key, model: decision.model, status: upstream.status, attempts: attempt + 1, durationMs: Date.now() - startedAt })
+    log.warn('upstream_not_ok', { key, model: decision.model, provider: provider.name, status: upstream.status, failedOver, durationMs: Date.now() - startedAt })
     record({ error: true, durationMs: Date.now() - startedAt })
     return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
   }

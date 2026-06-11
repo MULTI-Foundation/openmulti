@@ -85,6 +85,16 @@ export function recordMeterDrop(): void {
   meterDrops += 1
 }
 
+// Bascules de chemin d'accès (incrément D) : le chemin élu a épuisé ses retries sur
+// une panne transitoire et la requête est repartie sur l'alternative. Un taux élevé
+// = un chemin malade (le bandit le voit aussi via les erreurs enregistrées).
+const pathFallbacks = new Map<string, number>()
+
+export function recordPathFallback(model: string, from: string, to: string): void {
+  const id = `${model}${SEP}${from}${SEP}${to}`
+  pathFallbacks.set(id, (pathFallbacks.get(id) ?? 0) + 1)
+}
+
 export interface ModelAggregate {
   requests: number
   errors: number
@@ -227,6 +237,13 @@ export function renderProm(): string {
   out.push('# TYPE openmulti_meter_dropped_total counter')
   out.push(`openmulti_meter_dropped_total{} ${meterDrops}`)
 
+  out.push('# HELP openmulti_path_fallback_total Requests that failed over to an alternate access path (same model).')
+  out.push('# TYPE openmulti_path_fallback_total counter')
+  for (const [id, n] of pathFallbacks) {
+    const [model, from, to] = id.split(SEP) as [string, string, string]
+    line('openmulti_path_fallback_total', `model="${esc(model)}",from="${esc(from)}",to="${esc(to)}"`, n)
+  }
+
   return out.join('\n') + '\n'
 }
 
@@ -235,5 +252,6 @@ export function _resetMetrics(): void {
   stats.clear()
   bandit.clear()
   pricingMisses.clear()
+  pathFallbacks.clear()
   meterDrops = 0
 }

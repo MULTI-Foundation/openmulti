@@ -119,15 +119,20 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   `max_tokens` floor of 32000 for the `moonshotai/kimi-k2*` family when unset (Moonshot's 8192
   default truncates long agent generations). These exist for behavioral parity — don't drop them.
 
-## Upstream retry (same model only)
+## Upstream retry (same model only) + path failover
 
 `routes/chat.ts` wraps the upstream call in a bounded retry loop (`OPENMULTI_MAX_RETRIES`,
 default 2) for transient failures: connect errors and `isRetryableStatus` (429/500/502/503/504).
 It **retries the same model** — it never switches models, because that would change the answer
-(cross-model fallback is v1 territory). Retries only fire *before* any byte reaches the client,
-so the same loop covers stream and non-stream. Backoff is exponential (cap 2s) and honors a sane
-`Retry-After`. 4xx (except 429) is deterministic and returned as-is. Counted in
-`openmulti_retries_total`.
+(cross-model fallback is out of scope). When the elected access path exhausts its retries on a
+transient failure AND the model has an alternate path (`pathsFor`, today: moonshotai/* with a
+Moonshot key), the request **fails over to the other path — same model, answer preserved**
+(`OPENMULTI_PATH_FALLBACK=0` disables). The abandoned path's failure is recorded (bandit/metering
+see the error, a sick path loses its election) and counted in `openmulti_path_fallback_total`;
+the trace lands in `reason` (`via openrouter (fallback from moonshot)`). Retries/failovers only
+fire *before* any byte reaches the client, so the same loop covers stream and non-stream. Backoff
+is exponential (cap 2s) and honors a sane `Retry-After`. 4xx (except 429) is deterministic and
+returned as-is — no retry, no failover. Counted in `openmulti_retries_total`.
 
 ## The contract is law
 

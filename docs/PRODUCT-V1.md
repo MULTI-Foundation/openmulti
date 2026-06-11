@@ -57,7 +57,7 @@
 | A | `GET /v1/models` + docs API | ✅ PR #18 |
 | B | Valkey + metering durable par clé (`meter.ts`, `/admin/usage`) | ✅ |
 | C | Cycle de vie des clés + plafonds de dépense (`keys.ts`, `/admin/keys`, `/admin/caps`) | ✅ |
-| D | Fallback cross-provider (chemins d'abord) | |
+| D | Fallback cross-provider (entre chemins du même modèle, `pathsFor`) | ✅ |
 | E | Embeddings + tests de contrat tools/structured outputs | |
 | F | Rate-limit sur l'état partagé | |
 | G | Curation catalogue (continu) | |
