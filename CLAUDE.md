@@ -136,9 +136,11 @@ returned as-is — no retry, no failover. Counted in `openmulti_retries_total`.
 
 ## The contract is law
 
-`test/contract.test.ts` locks the 5 coupling points MyMULTI depends on (documented in
+`test/contract.test.ts` locks the coupling points MyMULTI depends on (documented in
 `docs/ARCHITECTURE.md` §5): `usage.cost` preserved, pure-OpenAI response without the extension,
-`openmulti.reason` exposed with it, `auto`+tier resolution / concrete-id honoring, Bearer auth.
+`openmulti.reason` exposed with it, `auto`+tier resolution / concrete-id honoring, Bearer auth,
+and (cases 6a/6b) verbatim pass-through of `tools`/`tool_choice`/`response_format`/tool messages
+with `tool_calls` responses returned byte-identical.
 You may freely change the catalog, routing, providers — **as long as these tests stay green.** If a
 change requires editing the contract test's assertions, that is an interface change to MyMULTI and
 must be treated as such (coordinate, don't just make the test pass).

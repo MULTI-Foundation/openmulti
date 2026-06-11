@@ -6,6 +6,7 @@ import { auth, metricsAuth, adminAuth } from './auth.js'
 import { rateLimit } from './ratelimit.js'
 import { chat } from './routes/chat.js'
 import { models } from './routes/models.js'
+import { embeddings } from './routes/embeddings.js'
 import { admin } from './routes/admin.js'
 import { renderProm } from './metrics.js'
 import { config } from './config.js'
@@ -39,6 +40,7 @@ app.use('/v1/*', auth)
 app.use('/v1/*', rateLimit)
 app.route('/', chat)
 app.route('/', models)
+app.route('/', embeddings)
 
 // Routes d'admin (metering durable, bientôt cycle de vie des clés) : token ops strict.
 app.use('/admin/*', adminAuth)

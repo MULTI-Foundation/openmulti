@@ -230,3 +230,36 @@ test('metrics: format prometheus, labelise par projet, jamais le secret brut', a
   assert.match(body, /key="contract"/) // sk_contract_test -> label projet "contract"
   assert.doesNotMatch(body, /sk_contract_test/) // le secret brut ne fuit jamais
 })
+
+// ── 6. Tool-calling & structured outputs : le pass-through est GARANTI ─────────
+// Ces champs transitaient déjà ; ces cas verrouillent qu'ils transitent verbatim
+// (point de couplage implicite des boucles agent MyMULTI — désormais explicite).
+
+test('6a. tools/tool_choice/response_format/messages-tool passent verbatim a l\'upstream', async () => {
+  const tools = [{ type: 'function', function: { name: 'get_weather', parameters: { type: 'object', properties: { city: { type: 'string' } } } } }]
+  const response_format = { type: 'json_schema', json_schema: { name: 'out', schema: { type: 'object' } } }
+  const messages = [
+    { role: 'user', content: 'meteo?' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: '{"temp":21}' },
+  ]
+  await post({ model: 'auto', openmulti: { tier: 'balanced' }, messages, tools, tool_choice: 'auto', response_format })
+  assert.deepEqual(lastBody.tools, tools)
+  assert.equal(lastBody.tool_choice, 'auto')
+  assert.deepEqual(lastBody.response_format, response_format)
+  assert.deepEqual(lastBody.messages, messages)
+  assert.equal(lastBody.openmulti, undefined, 'le bloc openmulti ne doit jamais fuiter')
+})
+
+test('6b. une reponse tool_calls revient byte-identique sans extension', async () => {
+  const upstream = {
+    id: 'gen-2',
+    choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_9', type: 'function', function: { name: 'f', arguments: '{}' } }] }, finish_reason: 'tool_calls' }],
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7, cost: 0.001 },
+  }
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify(upstream), { status: 200, headers: { 'content-type': 'application/json' } })) as any
+  const res = await post({ model: 'anthropic/claude-sonnet-4-5', messages: [{ role: 'user', content: 'hi' }], tools: [] })
+  const j = await res.json()
+  assert.deepEqual(j, upstream) // pas un champ de plus, pas un de moins
+})

@@ -9,3 +9,14 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 export function isRetryableStatus(status: number): boolean {
   return RETRYABLE_STATUS.has(status)
 }
+
+// Backoff before a retry: exponential (200ms, 400ms, …) capped at 2s. Honor a sane
+// Retry-After (seconds) from the upstream, capped so a request can't hang on it.
+export function backoff(attempt: number, retryAfter?: string | null): Promise<void> {
+  let ms = Math.min(200 * 2 ** (attempt - 1), 2000)
+  if (retryAfter) {
+    const secs = Number(retryAfter)
+    if (Number.isFinite(secs) && secs > 0) ms = Math.min(secs * 1000, 5000)
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
