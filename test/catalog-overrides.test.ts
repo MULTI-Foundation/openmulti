@@ -62,12 +62,12 @@ const del = (slot: string) =>
   app.fetch(new Request(`http://test/admin/catalog/${slot}`, { method: 'DELETE', headers: OPS }))
 const get = () => app.fetch(new Request('http://test/admin/catalog', { headers: OPS }))
 
-test('defauts cures : primaires iso en tete, quality = opus-4.8, sets multi-candidats', () => {
-  assert.equal(candidatesFor('balanced')[0], 'anthropic/claude-sonnet-4-5') // iso
-  assert.equal(candidatesFor('quality')[0], 'anthropic/claude-opus-4.8') // decision du 2026-06-11
-  assert.ok(candidatesFor('balanced').length >= 3, 'le bandit a besoin de candidats')
-  assert.equal(candidatesFor('balanced', 'agent')[0], 'moonshotai/kimi-k2.6') // iso agent
-  assert.ok(candidatesFor('balanced', 'agent').includes('qwen/qwen3-coder-plus'))
+test('defauts neutres : fallback minimal sans fichier ni env (la curation vit hors repo)', () => {
+  // sans OPENMULTI_CATALOG_FILE ni env sur ces slots, on sert le fallback neutre —
+  // un seul modele par slot, sans reveler la tambouille courante
+  assert.deepEqual(candidatesFor('balanced'), ['anthropic/claude-sonnet-4-5'])
+  assert.deepEqual(candidatesFor('quality'), ['anthropic/claude-opus-4.8'])
+  assert.deepEqual(candidatesFor('balanced', 'agent'), ['moonshotai/kimi-k2.6'])
 })
 
 test('override admin > env > defauts, et DELETE retombe proprement', async () => {
@@ -93,7 +93,7 @@ test('override admin > env > defauts, et DELETE retombe proprement', async () =>
 test('slot par purpose : agent_balanced pilotable a la volee', async () => {
   await put('agent_balanced', { models: ['z-ai/glm-5'] })
   assert.deepEqual(candidatesFor('balanced', 'agent'), ['z-ai/glm-5'])
-  // le tier nu n'est pas affecte
+  // le tier nu n'est pas affecte (fallback neutre)
   assert.equal(candidatesFor('balanced')[0], 'anthropic/claude-sonnet-4-5')
 })
 

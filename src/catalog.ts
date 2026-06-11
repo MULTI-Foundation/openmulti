@@ -1,45 +1,33 @@
-// The catalog: tier -> candidate models. This is the ONE place a maintainer changes
-// "which models serve economy / balanced / quality" without any consuming project
-// (MyMULTI included) having to change a line. Le PREMIER candidat de chaque slot est
-// le primaire (stratégie 'default') ; les suivants ne servent que le bandit ('smart',
-// opt-in). Précédence par slot : override admin (catalog-overrides.ts, Redis, à la
-// volée) > env pluriel > env singulier > défauts ci-dessous.
+// The catalog: tier -> candidate models. Le PREMIER candidat de chaque slot est le
+// primaire (stratégie 'default') ; les suivants ne servent que le bandit ('smart').
 //
-// Curation du 2026-06-11 (docs/PRODUCT-V1.md, incrément G) : ids et prix vérifiés sur
-// l'API publique OpenRouter le jour même. Les primaires historiques restent en tête
-// (iso-comportement), à UNE exception décidée par le mainteneur : le primaire quality
-// passe d'opus-4-1 ($15/$75 par MTok) à opus-4.8 ($5/$25, plus récent et plus capable).
+// La VRAIE correspondance tier→modèles est de la tambouille interne — une partie de
+// la valeur d'OpenMulti — et ne vit PAS dans ce repo : elle est portée par un fichier
+// de catalogue local NON versionné (OPENMULTI_CATALOG_FILE, cf catalog-file.ts ;
+// monté en ConfigMap créée hors manifeste en cluster) et ajustée à chaud par l'API
+// admin. Les défauts ci-dessous sont un fallback MINIMAL et neutre : de quoi servir
+// chaque tier sans fichier, sans révéler la curation courante.
+//
+// Précédence par slot : override admin (catalog-overrides.ts, Redis, à la volée)
+// > fichier local (catalog-file.ts) > env pluriel > env singulier > défauts ci-dessous.
 
 import { catalogOverride, listCatalogOverrides } from './catalog-overrides.js'
+import { catalogFileSlot, catalogFileSlots } from './catalog-file.js'
 import type { Tier } from './types.js'
 
 const TIER_DEFAULT: Record<Tier, string[]> = {
-  economy: [
-    'anthropic/claude-haiku-4-5', // primaire historique — $1/$5
-    'deepseek/deepseek-v4-flash', // $0.098/$0.197, ctx 1M — 10x moins cher
-    'google/gemini-3.1-flash-lite', // $0.25/$1.50
-    'openai/gpt-5-mini', // $0.25/$2.00
-  ],
-  balanced: [
-    'anthropic/claude-sonnet-4-5', // primaire historique — $3/$15
-    'openai/gpt-5.1', // $1.25/$10
-    'deepseek/deepseek-v4-pro', // $0.435/$0.87
-    'z-ai/glm-5', // $0.60/$1.92
-  ],
-  quality: [
-    'anthropic/claude-opus-4.8', // primaire depuis 2026-06-11 — $5/$25 (ex: opus-4-1 à $15/$75)
-    'openai/gpt-5.5', // $5/$30
-  ],
+  economy: ['anthropic/claude-haiku-4-5'],
+  balanced: ['anthropic/claude-sonnet-4-5'],
+  quality: ['anthropic/claude-opus-4.8'],
 }
 
 // Routing par tache: certaines taches ont un modele plus adapte que le defaut du tier.
-// 'agent' = generation de code longue (containers OpenClaw): on route vers un modele de
-// code (Kimi K2.6) sur balanced/quality. C'est pourquoi le floor max_tokens Kimi et le
-// steering provider de buildUpstreamBody se declenchent pour ces appels.
+// 'agent' = generation de code longue (containers OpenClaw). Le floor max_tokens Kimi
+// et le steering provider de buildUpstreamBody se declenchent pour ces appels.
 const PURPOSE_DEFAULT: Record<string, Partial<Record<Tier, string[]>>> = {
   agent: {
-    balanced: ['moonshotai/kimi-k2.6', 'qwen/qwen3-coder-plus', 'z-ai/glm-5'],
-    quality: ['moonshotai/kimi-k2.6', 'qwen/qwen3-coder-plus', 'z-ai/glm-5'],
+    balanced: ['moonshotai/kimi-k2.6'],
+    quality: ['moonshotai/kimi-k2.6'],
   },
 }
 
@@ -65,7 +53,8 @@ const envName = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '_')
 export function candidatesFor(tier: Tier, purpose?: string): string[] {
   const T = envName(tier)
   if (purpose) {
-    const dynamic = catalogOverride(`${purpose.toLowerCase()}_${tier}`)
+    const slotName = `${purpose.toLowerCase()}_${tier}`
+    const dynamic = catalogOverride(slotName) ?? catalogFileSlot(slotName)
     if (dynamic) return dynamic
     const slot = `${envName(purpose)}_${T}`
     const plural = envList(`OPENMULTI_MODELS_${slot}`)
@@ -77,6 +66,7 @@ export function candidatesFor(tier: Tier, purpose?: string): string[] {
   }
   return (
     catalogOverride(tier) ??
+    catalogFileSlot(tier) ??
     envList(`OPENMULTI_MODELS_${T}`) ??
     (process.env[`OPENMULTI_MODEL_${T}`] ? [process.env[`OPENMULTI_MODEL_${T}`]!] : TIER_DEFAULT[tier])
   )
@@ -135,7 +125,7 @@ export function catalogModels(): CatalogEntry[] {
     const m = /^OPENMULTI_MODELS?_([A-Z0-9_]+)_(ECONOMY|BALANCED|QUALITY)$/.exec(k)
     if (m) purposes.add(m[1]!.toLowerCase().replace(/_/g, '-'))
   }
-  for (const slot of Object.keys(listCatalogOverrides())) {
+  for (const slot of [...Object.keys(listCatalogOverrides()), ...Object.keys(catalogFileSlots())]) {
     const m = /^(.+)_(economy|balanced|quality)$/.exec(slot)
     if (m) purposes.add(m[1]!)
   }

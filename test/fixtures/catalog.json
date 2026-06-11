@@ -1,0 +1,10 @@
+{
+  "_comment": "Fixture de test du fichier de catalogue — modeles FICTIFS (la vraie tambouille n'est jamais versionnee).",
+  "slots": {
+    "economy": ["file/eco-primary", "file/eco-alt"],
+    "balanced": ["file/bal-primary"],
+    "research_quality": ["file/research-model"],
+    "bad slot!": ["file/x"],
+    "quality": []
+  }
+}

@@ -22,3 +22,6 @@ target/
 
 # Logs
 *.log
+
+# Tambouille interne (correspondance tier->modeles) : jamais versionnee.
+catalog.local.json

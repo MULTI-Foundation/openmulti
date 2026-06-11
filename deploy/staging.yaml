@@ -77,6 +77,20 @@ spec:
             # En prod, demarrer sans (iso) et l'activer apres observation.
             - name: OPENMULTI_DEFAULT_ROUTE
               value: "smart"
+            # Catalogue local (la correspondance tier->modeles, configuration
+            # d'exploitation NON versionnee). La ConfigMap est creee HORS manifeste :
+            #   kubectl -n openmulti-staging create configmap openmulti-catalog \
+            #     --from-file=catalog.json=catalog.local.json
+            # Volume optional: sans ConfigMap, le fichier est absent et l'app retombe
+            # sur env/defauts (zero regression). Mise a jour = recreer la ConfigMap
+            # + rollout restart (lecture au boot) ; l'ajustement a chaud passe par
+            # PUT /admin/catalog (qui prime sur le fichier).
+            - name: OPENMULTI_CATALOG_FILE
+              value: "/etc/openmulti/catalog.json"
+          volumeMounts:
+            - name: catalog
+              mountPath: /etc/openmulti
+              readOnly: true
           readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
           resources:
@@ -88,6 +102,11 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: catalog
+          configMap:
+            name: openmulti-catalog
+            optional: true  # absente = pas de fichier, l'app retombe sur env/defauts
 ---
 apiVersion: v1
 kind: Service
