@@ -12,6 +12,7 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
+import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight } from '../keys.js'
 import { SseUsageScanner } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
@@ -32,6 +33,18 @@ function backoff(attempt: number, retryAfter?: string | null): Promise<void> {
 chat.post('/v1/chat/completions', async (c) => {
   const startedAt = Date.now()
   const key = keyLabel(c.get('apiKey'))
+
+  // Plafond de dépense journalier du projet (incrément C) : purement mémoire (zéro
+  // I/O ici), fail-open sans plafond/donnée. 429 explicite, Retry-After = minuit UTC.
+  const cap = checkSpendCap(key)
+  if (cap.blocked) {
+    log.warn('spend_cap_blocked', { key, capUsd: cap.capUsd, spentUsd: cap.spentUsd })
+    return c.json(
+      { error: { message: `Daily spend cap reached (${cap.spentUsd?.toFixed(4)}/${cap.capUsd} USD)`, type: 'spend_cap_exceeded' } },
+      429,
+      { 'Retry-After': String(secondsToUtcMidnight()) },
+    )
+  }
 
   // OM-02: bound body size. The Content-Length middleware (app.ts) rejects honest
   // oversized clients before buffering; this catches a missing/lying Content-Length.
@@ -63,6 +76,7 @@ chat.post('/v1/chat/completions', async (c) => {
     const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
     recordRequest(rec)
     meterUsage(rec)
+    if (rec.costUsd) noteLocalSpend(key, rec.costUsd) // le plafond mord entre deux refreshs
   }
 
   log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })

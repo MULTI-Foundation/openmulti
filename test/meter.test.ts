@@ -42,6 +42,14 @@ function fakeClient() {
     async hGetAll(k: string) {
       return Object.fromEntries([...(store.get(k) ?? new Map())].map(([f, v]) => [f, String(v)]))
     },
+    // Utilisés par keys.ts (registre/plafonds), pas par meter — présents pour
+    // satisfaire l'interface StoreClient partagée.
+    async hSet(k: string, f: string, v: string) {
+      hash(k).set(f, v as unknown as number)
+    },
+    async hDel(k: string, f: string) {
+      hash(k).delete(f)
+    },
   }
 }
 
