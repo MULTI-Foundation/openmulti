@@ -65,3 +65,53 @@ export const DEFAULT_TIER: Tier = 'balanced'
 export function isTier(v: unknown): v is Tier {
   return v === 'economy' || v === 'balanced' || v === 'quality'
 }
+
+const TIERS: Tier[] = ['economy', 'balanced', 'quality']
+
+export interface CatalogEntry {
+  model: string
+  /** Tiers où ce modèle apparaît comme candidat (hors purpose). */
+  tiers: Tier[]
+  /** Purposes où ce modèle apparaît ('image' = le modèle de génération d'image). */
+  purposes: string[]
+}
+
+/**
+ * Inventaire des modèles servis (pour GET /v1/models) : candidats de chaque tier,
+ * modèles par purpose (intégrés + pilotés par env), et le modèle image. Les purposes
+ * découverts via l'env sont dé-manglés par approximation (AGENT -> agent,
+ * EDIT_HTML_BLOCK -> edit-html-block) — exact pour les purposes kebab-case
+ * conventionnels, cf envName().
+ */
+export function catalogModels(): CatalogEntry[] {
+  const map = new Map<string, CatalogEntry>()
+  const add = (model: string, tier?: Tier, purpose?: string) => {
+    let e = map.get(model)
+    if (!e) {
+      e = { model, tiers: [], purposes: [] }
+      map.set(model, e)
+    }
+    if (tier && !e.tiers.includes(tier)) e.tiers.push(tier)
+    if (purpose && !e.purposes.includes(purpose)) e.purposes.push(purpose)
+  }
+
+  for (const tier of TIERS) for (const m of candidatesFor(tier)) add(m, tier)
+
+  const purposes = new Set<string>(Object.keys(PURPOSE_DEFAULT))
+  for (const k of Object.keys(process.env)) {
+    const m = /^OPENMULTI_MODELS?_([A-Z0-9_]+)_(ECONOMY|BALANCED|QUALITY)$/.exec(k)
+    if (m) purposes.add(m[1]!.toLowerCase().replace(/_/g, '-'))
+  }
+  for (const purpose of purposes) {
+    for (const tier of TIERS) {
+      // Ne lister que les purposes qui ont VRAIMENT un modèle propre sur ce tier
+      // (candidatesFor retombe sur le tier sinon, ce qui dupliquerait tout).
+      const own = candidatesFor(tier, purpose)
+      const base = candidatesFor(tier)
+      if (own.join(',') !== base.join(',')) for (const m of own) add(m, undefined, purpose)
+    }
+  }
+
+  add(IMAGE_MODEL, undefined, 'image')
+  return [...map.values()]
+}
