@@ -72,6 +72,11 @@ spec:
             # meme namespace. Retirer la var pour desactiver (no-op cote app).
             - name: REDIS_URL
               value: "redis://valkey:6379"
+            # Bandit actif par defaut en STAGING (active le 2026-06-11 pour observer la
+            # curation en reel ; un appelant peut toujours forcer openmulti.route).
+            # En prod, demarrer sans (iso) et l'activer apres observation.
+            - name: OPENMULTI_DEFAULT_ROUTE
+              value: "smart"
           readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
           resources:
