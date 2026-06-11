@@ -154,9 +154,16 @@ free-text `console.log`. `src/metrics.ts` is an in-process Prometheus registry (
 restart) exposed at **`GET /metrics`** (authed — exposes per-project cost/token data). Requests
 are recorded in `routes/chat.ts` at completion / upstream error / stream stall. Metrics are
 labelled by **project** (`keyLabel`: `sk_<project>_<secret>` → `<project>`, never the raw
-secret) × model. This is the substrate for the roadmap's per-key billing and quality monitoring;
-it is pure side-channel and must never alter a proxied response. Activation côté cluster (token
-ops, scrape Prometheus, requêtes PromQL) : `docs/OBSERVABILITY-SETUP.md`.
+secret) × model × provider (access path). This is the monitoring side; it is pure side-channel
+and must never alter a proxied response. Activation côté cluster (token ops, scrape Prometheus,
+requêtes PromQL) : `docs/OBSERVABILITY-SETUP.md`.
+
+**Durable metering is separate** (`src/meter.ts`, the billing substrate — `docs/PRODUCT-V1.md`):
+per key × UTC day × model × path counters in Redis/Valkey (`REDIS_URL`; empty = no-op, so dev and
+tests are unchanged). Writes are fire-and-forget — a Redis outage never breaks a call, drops are
+counted in `openmulti_meter_dropped_total`. Read via `GET /admin/usage?key=&days=` (strict ops
+token, `adminAuth` — no caller-key fallback). Valkey runs in the same namespace
+(`deploy/staging.yaml`, applied manually by an admin — the CI only does `set image`).
 
 ## Security gates (opt-in)
 

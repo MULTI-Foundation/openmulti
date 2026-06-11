@@ -68,6 +68,10 @@ spec:
             #   value: "600"
             # - name: OPENMULTI_MAX_TOKENS_BALANCED
             #   value: "32000"
+            # Metering durable (facturation par cle, cf docs/PRODUCT-V1.md) — Valkey du
+            # meme namespace. Retirer la var pour desactiver (no-op cote app).
+            - name: REDIS_URL
+              value: "redis://valkey:6379"
           readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
           livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
           resources:
@@ -107,7 +111,7 @@ spec:
           podSelector: { matchLabels: { app: multi-app } }
       ports: [{ port: 8080, protocol: TCP }]
 ---
-# Egress: DNS + HTTPS (OpenRouter).
+# Egress: DNS + HTTPS (OpenRouter, providers directs) + Valkey (metering durable).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: allow-egress, namespace: openmulti-staging }
@@ -118,6 +122,71 @@ spec:
     - to: [{ namespaceSelector: {} }]
       ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
     - ports: [{ port: 443, protocol: TCP }]
+    - to: [{ podSelector: { matchLabels: { app: valkey } } }]
+      ports: [{ port: 6379, protocol: TCP }]
+---
+# ── Valkey (metering durable par cle, docs/PRODUCT-V1.md) ──────────────────────
+# Fork Redis (Linux Foundation, BSD), protocole identique. Mono-pod + PVC local-path
+# (comme Prometheus), AOF everysec : perte max ~1s en cas de crash, acceptable pour
+# des compteurs d'usage. Recreate: le PVC est RWO.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: valkey-data, namespace: openmulti-staging }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: valkey, namespace: openmulti-staging, labels: { app: valkey } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: valkey } }
+  template:
+    metadata: { labels: { app: valkey } }
+    spec:
+      containers:
+        - name: valkey
+          # Epingle par digest (meme regle qu'OM-09 ; tag lisible: valkey/valkey:8-alpine)
+          image: valkey/valkey:8-alpine@sha256:77643d152547b446fc15cbafaff22004545663fcd40c6b28038ad283837baa75
+          args: ["--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction"]
+          ports: [{ name: redis, containerPort: 6379 }]
+          volumeMounts: [{ name: data, mountPath: /data }]
+          readinessProbe: { tcpSocket: { port: redis }, initialDelaySeconds: 2, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: redis }, initialDelaySeconds: 5, periodSeconds: 30 }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999  # user `valkey` de l'image
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: valkey-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: valkey, namespace: openmulti-staging }
+spec:
+  type: ClusterIP
+  selector: { app: valkey }
+  ports: [{ name: redis, port: 6379, targetPort: redis }]
+---
+# Valkey n'accepte que les pods openmulti du namespace (default-deny sinon).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-openmulti-to-valkey, namespace: openmulti-staging }
+spec:
+  podSelector: { matchLabels: { app: valkey } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: openmulti } } }]
+      ports: [{ port: 6379, protocol: TCP }]
 ---
 # ServiceAccount de deploiement, scope au seul namespace openmulti-staging.
 apiVersion: v1

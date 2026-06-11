@@ -54,10 +54,15 @@
 
 | # | Incrément | Statut |
 |---|---|---|
-| A | `GET /v1/models` + docs API | en cours |
-| B | Redis + metering durable par clé | |
+| A | `GET /v1/models` + docs API | ✅ PR #18 |
+| B | Valkey + metering durable par clé (`meter.ts`, `/admin/usage`) | ✅ |
 | C | Cycle de vie des clés + plafonds de dépense | |
 | D | Fallback cross-provider (chemins d'abord) | |
 | E | Embeddings + tests de contrat tools/structured outputs | |
 | F | Rate-limit sur l'état partagé | |
 | G | Curation catalogue (continu) | |
+
+> Choix d'image acté le 11 juin : **Valkey** (fork Redis, Linux Foundation, BSD) —
+> protocole et client identiques, licence sans ambiguïté. Activation staging : les
+> objets Valkey de `deploy/staging.yaml` sont à appliquer manuellement par un admin
+> (la CI ne fait que `set image`), cf l'en-tête du manifeste.
