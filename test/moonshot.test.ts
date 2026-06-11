@@ -98,6 +98,20 @@ test('buildBody: strip openmulti/usage/provider (extensions OpenRouter), floor K
   assert.deepEqual(body.stream_options, { include_usage: true })
 })
 
+test('buildBody: tools/response_format passent verbatim (le strip ne vise que les OpenRouter-ismes)', () => {
+  const tools = [{ type: 'function', function: { name: 'f' } }]
+  const response_format = { type: 'json_schema', json_schema: { name: 'o', schema: {} } }
+  const body = buildMoonshotBody(
+    { messages: [], tools, tool_choice: 'auto', response_format, usage: { include: true }, provider: { sort: 'throughput' } } as any,
+    'moonshotai/kimi-k2.6',
+  )
+  assert.deepEqual(body.tools, tools)
+  assert.equal(body.tool_choice, 'auto')
+  assert.deepEqual(body.response_format, response_format)
+  assert.equal(body.usage, undefined)
+  assert.equal(body.provider, undefined)
+})
+
 test('buildBody: le plafond par tier (OM-01) s\'applique apres le floor', () => {
   const body = buildMoonshotBody(
     { messages: [] } as any,

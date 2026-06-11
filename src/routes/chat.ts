@@ -8,6 +8,7 @@
 import { Hono } from 'hono'
 import { route } from '../router.js'
 import { pathsFor, type UpstreamCall } from '../providers/index.js'
+import { backoff } from '../providers/shared.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
@@ -18,17 +19,6 @@ import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
-
-// Backoff before a retry: exponential (200ms, 400ms, …) capped at 2s. Honor a sane
-// Retry-After (seconds) from the upstream, capped so a request can't hang on it.
-function backoff(attempt: number, retryAfter?: string | null): Promise<void> {
-  let ms = Math.min(200 * 2 ** (attempt - 1), 2000)
-  if (retryAfter) {
-    const secs = Number(retryAfter)
-    if (Number.isFinite(secs) && secs > 0) ms = Math.min(secs * 1000, 5000)
-  }
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 chat.post('/v1/chat/completions', async (c) => {
   const startedAt = Date.now()

@@ -38,6 +38,21 @@ Erreurs : `400` (corps invalide), `401`, `413` (corps > limite), `429` (rate lim
 avec `Retry-After`), `504` (upstream injoignable après retries). Les erreurs upstream
 sont relayées avec leur statut d'origine.
 
+## POST /v1/embeddings
+
+Pass-through OpenAI-compatible (`input`, `model`, `dimensions`, …) :
+`model: "auto"` → le modèle d'embeddings par défaut (`OPENMULTI_MODEL_EMBEDDING`,
+`openai/text-embedding-3-small` sinon) ; un id concret est honoré tel quel. Mêmes
+règles que le chat : bloc `openmulti` strippé à l'aller, réponse byte-identique sans
+extension, retry borné sur panne transitoire, plafond de dépense appliqué, usage/coût
+mesurés.
+
+## Tool-calling & structured outputs
+
+`tools`, `tool_choice`, `response_format` (json_schema) et les messages `role: "tool"`
+passent **verbatim** vers l'upstream, et les réponses `tool_calls` reviennent
+intactes — garanti par le test de contrat (cas 6a/6b), pas seulement constaté.
+
 ## GET /v1/models
 
 Liste OpenAI (`{object:"list", data:[…]}`) : les alias d'intention (`auto`,

@@ -18,8 +18,10 @@ export interface OpenMultiExtension {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: unknown
+  /** Champs OpenAI additionnels (tool_calls, tool_call_id, name…) — pass-through. */
+  [k: string]: unknown
 }
 
 /** Incoming chat request (OpenAI-compatible + openmulti extension). */

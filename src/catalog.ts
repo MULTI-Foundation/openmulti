@@ -60,6 +60,11 @@ export function candidatesFor(tier: Tier, purpose?: string): string[] {
 // would be wrong. Image gen is part of bloc A (OpenMulti owns it), cf ARCHITECTURE.md.
 export const IMAGE_MODEL = process.env.OPENMULTI_MODEL_IMAGE || 'google/gemini-2.5-flash-image'
 
+// Modèle d'embeddings par défaut quand l'appelant envoie model:'auto' sur
+// /v1/embeddings. Id vérifié sur openrouter.ai/collections/embedding-models
+// (2026-06-11) : le standard le moins cher ($0.02/MTok input).
+export const EMBEDDING_MODEL = process.env.OPENMULTI_MODEL_EMBEDDING || 'openai/text-embedding-3-small'
+
 export const DEFAULT_TIER: Tier = 'balanced'
 
 export function isTier(v: unknown): v is Tier {
@@ -113,5 +118,6 @@ export function catalogModels(): CatalogEntry[] {
   }
 
   add(IMAGE_MODEL, undefined, 'image')
+  add(EMBEDDING_MODEL, undefined, 'embedding')
   return [...map.values()]
 }
