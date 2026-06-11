@@ -72,8 +72,13 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
    `tier` (from `openmulti.tier`, the `auto:<tier>` alias, or `DEFAULT_TIER`), refined by `purpose`.
 2. **`providerFor(model)`** (`src/providers/index.ts`) → the `Provider` carrying the call
    (the multi-provider seam, `docs/MULTI-PROVIDER-SPEC.md`). Default: OpenRouter for everything.
-   A vendor's models go **direct** only when `OPENMULTI_PROVIDER_<VENDOR>=direct` AND its API key
-   is set (today: Moonshot, `src/providers/moonshot.ts`) — missing key = silent OpenRouter fallback.
+   Per-vendor opt-in via `OPENMULTI_PROVIDER_<VENDOR>` (today: Moonshot, `src/providers/moonshot.ts`;
+   requires the vendor's API key, missing key = silent OpenRouter fallback): `direct` = always
+   direct; `smart` = **path bandit** (spec step 4) — the same explore/exploit as the tier bandit
+   (`selectModel` with a custom aggregator) over per-path decayed stats (`pathAggregate`), so
+   direct vs OpenRouter is arbitrated on observed cost/health, a sick direct path falls back and
+   can recover. The chosen path is traced in `reason` (`via moonshot`) and the `provider` label on
+   all metrics (the tier-level view `modelAggregate` sums across paths).
    Then **`provider.buildBody(req, model)`** → strips the `openmulti` block (provider must never see
    it), sets the resolved model (Moonshot: vendor prefix stripped, `kimi-k2.6`), applies that
    provider's **own steering** (see below) — OpenRouter-isms (`usage.include`, `provider.sort`)

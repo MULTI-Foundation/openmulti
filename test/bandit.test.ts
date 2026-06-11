@@ -25,7 +25,7 @@ test('decay: la vue bandit s\'amortit, les compteurs Prometheus restent monotone
   assert.ok(a.requests > 0.94 && a.requests < 1, `requests amorti attendu ~0.95, obtenu ${a.requests}`)
   assert.ok(a.costUsd > 0.94 && a.costUsd < 1)
   // Le compteur exposé sur /metrics, lui, ne décroît jamais.
-  assert.match(renderProm(), /openmulti_requests_total\{key="k",model="a\/1"\} 1\b/)
+  assert.match(renderProm(), /openmulti_requests_total\{key="k",model="a\/1",provider="openrouter"\} 1\b/)
 })
 
 test('refresh: le candidat non élu continue d\'être ré-échantillonné (pas d\'exploit éternel)', () => {

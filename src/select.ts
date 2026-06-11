@@ -18,7 +18,7 @@
 // OPENMULTI_SMART_DECAY_WINDOW=0 disables the decay (lifetime stats: explore once,
 // exploit forever — the pre-bandit behavior, locked by test/select.test.ts).
 
-import { modelAggregate } from './metrics.js'
+import { modelAggregate, type ModelAggregate } from './metrics.js'
 import type { RouteStrategy } from './types.js'
 
 const MIN_SAMPLES = Math.max(1, Number(process.env.OPENMULTI_SMART_MIN_SAMPLES ?? 10))
@@ -30,13 +30,23 @@ export interface Selection {
   note: string
 }
 
-export function selectModel(candidates: string[], strategy: RouteStrategy): Selection {
+/**
+ * `aggregate` permet de réutiliser la même mécanique explore/exploit sur d'autres
+ * candidats que des modèles : l'étape 4 (providers/index.ts) arbitre des CHEMINS
+ * D'ACCÈS du même modèle avec les stats par chemin (pathAggregate). Défaut : stats
+ * par modèle, tous chemins confondus (la sélection de tier).
+ */
+export function selectModel(
+  candidates: string[],
+  strategy: RouteStrategy,
+  aggregate: (candidate: string) => ModelAggregate = modelAggregate,
+): Selection {
   const first = candidates[0]!
   if (strategy === 'default' || candidates.length === 1) {
     return { model: first, note: candidates.length > 1 ? 'default: primary' : '' }
   }
 
-  const agg = candidates.map((m) => ({ m, ...modelAggregate(m) }))
+  const agg = candidates.map((m) => ({ m, ...aggregate(m) }))
 
   // 1. Explore: any candidate short on data gets the request (least-sampled first).
   const undersampled = agg.filter((a) => a.requests < MIN_SAMPLES)

@@ -50,10 +50,13 @@ chat.post('/v1/chat/completions', async (c) => {
 
   const decision = route(req)
   const provider = providerFor(decision.model)
+  // Trace le chemin d'accès quand il n'est pas celui par défaut (reason = texte libre
+  // de l'extension ; le chemin OpenRouter reste byte-identique à l'historique).
+  if (provider.name !== 'openrouter') decision.reason = `${decision.reason}, via ${provider.name}`
   const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
   const isStream = req.stream === true
 
-  log.info('request', { key, model: decision.model, reason: decision.reason, stream: isStream, messages: req.messages.length })
+  log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })
 
   // Bounded retry on transient upstream failures, SAME model. We retry to ride out a
   // hiccup (connect error, 429/5xx); we never switch models (that would change the
@@ -68,13 +71,13 @@ chat.post('/v1/chat/completions', async (c) => {
       const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
       if (attempt < config.maxRetries) {
         attempt++
-        recordRetry(key, decision.model)
+        recordRetry(key, decision.model, provider.name)
         log.warn('upstream_retry', { key, model: decision.model, attempt, reason })
         await backoff(attempt)
         continue
       }
       log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-      recordRequest({ key, model: decision.model, error: true, durationMs: Date.now() - startedAt })
+      recordRequest({ key, model: decision.model, provider: provider.name, error: true, durationMs: Date.now() - startedAt })
       return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
     }
 
@@ -82,7 +85,7 @@ chat.post('/v1/chat/completions', async (c) => {
       attempt++
       const retryAfter = call.response.headers.get('retry-after')
       await call.response.body?.cancel().catch(() => {}) // drain the failed body
-      recordRetry(key, decision.model)
+      recordRetry(key, decision.model, provider.name)
       log.warn('upstream_retry', { key, model: decision.model, attempt, status: call.response.status })
       await backoff(attempt, retryAfter)
       continue
@@ -94,7 +97,7 @@ chat.post('/v1/chat/completions', async (c) => {
   if (!upstream.ok) {
     const text = await upstream.text()
     log.warn('upstream_not_ok', { key, model: decision.model, status: upstream.status, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-    recordRequest({ key, model: decision.model, error: true, durationMs: Date.now() - startedAt })
+    recordRequest({ key, model: decision.model, provider: provider.name, error: true, durationMs: Date.now() - startedAt })
     return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
   }
 
@@ -134,7 +137,7 @@ chat.post('/v1/chat/completions', async (c) => {
             cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
           recordRequest({
-            key, model: decision.model, error: stalled,
+            key, model: decision.model, provider: provider.name, error: stalled,
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             costUsd: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
@@ -170,12 +173,12 @@ chat.post('/v1/chat/completions', async (c) => {
   const data = provider.normalizeResponse((await upstream.json()) as Record<string, unknown>, decision.model)
   const u = data.usage as { prompt_tokens: number; completion_tokens: number; cost?: number } | undefined
   log.info('completed', {
-    key, model: decision.model, stream: false,
+    key, model: decision.model, provider: provider.name, stream: false,
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     cost: u?.cost, durationMs: Date.now() - startedAt,
   })
   recordRequest({
-    key, model: decision.model,
+    key, model: decision.model, provider: provider.name,
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     costUsd: u?.cost, durationMs: Date.now() - startedAt,
   })
