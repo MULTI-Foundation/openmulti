@@ -15,6 +15,7 @@ export interface StoreClient {
   hGetAll(key: string): Promise<Record<string, string>>
   hSet(key: string, field: string, value: string): Promise<unknown>
   hDel(key: string, field: string): Promise<unknown>
+  incr(key: string): Promise<number>
 }
 
 let client: StoreClient | null = null

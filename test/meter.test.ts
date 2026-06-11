@@ -50,6 +50,12 @@ function fakeClient() {
     async hDel(k: string, f: string) {
       hash(k).delete(f)
     },
+    async incr(k: string) {
+      const h = hash('__counters__')
+      const v = Number(h.get(k) ?? 0) + 1
+      h.set(k, v as any)
+      return v
+    },
   }
 }
 

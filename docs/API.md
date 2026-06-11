@@ -67,6 +67,19 @@ Prometheus, authentifié (token ops dédié ou clé appelante). Compteurs par
 projet × modèle × chemin d'accès. Réservé à l'exploitation — voir
 `docs/OBSERVABILITY-SETUP.md`.
 
+## Administration du catalogue (ops)
+
+Le catalogue se pilote **à la volée**, sans redéploiement (token ops requis) :
+
+- `GET /admin/catalog` → overrides actifs + sets effectifs par tier (et `agent_*`).
+- `PUT /admin/catalog/:slot {models: ["vendor/model", …]}` → remplace le candidate set
+  du slot (`economy`/`balanced`/`quality` ou `<purpose>_<tier>`, ex. `agent_balanced`).
+  Liste ordonnée, **le premier est le primaire**, 8 max. Effet immédiat sur le pod
+  local, ≤ 10 s ailleurs.
+- `DELETE /admin/catalog/:slot` → retombe sur l'env puis les défauts du code.
+
+Précédence par slot : override admin > env (`OPENMULTI_MODELS_*`) > défauts versionnés.
+
 ## Administration des clés et plafonds (ops)
 
 Token ops strictement requis (comme `/admin/usage`).
