@@ -207,10 +207,16 @@ Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression
   in-flight requests/streams then exit, with a timeout guard (OM-10). `/health` no longer leaks the
   version (OM-08).
 
-Deferred findings (all Low, resolution documented in the audit, to do **before public exposure**):
-OM-06 (request-field pass-through → allowlist), OM-07 (upstream error pass-through → normalize).
-OM-09 is partially closed (base image pinned by digest in the Dockerfile, bump procedure in a
-comment there; cosign signing in CI remains). Nothing is left open without a decision.
+- **Upstream field allowlist** (`shared.ts` `pickAllowedFields`) — only known OpenAI/OpenRouter
+  fields are forwarded (both access paths + embeddings); unknown fields are stripped, counted
+  (`openmulti_request_fields_stripped_total`) and logged once per name. Escape hatch:
+  `OPENMULTI_ALLOWED_EXTRA_FIELDS` (OM-06).
+- **Normalized upstream errors** (`shared.ts` `normalizedUpstreamError`) — upstream error bodies
+  are never relayed (logged server-side, truncated); callers get a stable OpenAI-shaped
+  `error.type`/`error.code`, status preserved (OM-07).
+
+Remaining from the audit: OM-09 signature part only (cosign in CI — do with public exposure).
+Nothing is left open without a decision.
 
 ## Conventions
 

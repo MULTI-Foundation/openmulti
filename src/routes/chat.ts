@@ -8,7 +8,7 @@
 import { Hono } from 'hono'
 import { route } from '../router.js'
 import { pathsFor, type UpstreamCall } from '../providers/index.js'
-import { backoff } from '../providers/shared.js'
+import { backoff, normalizedUpstreamError } from '../providers/shared.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
@@ -144,10 +144,16 @@ chat.post('/v1/chat/completions', async (c) => {
 
   const upstream = call.response
   if (!upstream.ok) {
-    const text = await upstream.text()
-    log.warn('upstream_not_ok', { key, model: decision.model, provider: provider.name, status: upstream.status, failedOver, durationMs: Date.now() - startedAt })
+    // OM-07 : le corps d'erreur upstream n'est jamais relayé (divulgation provider/
+    // routing/internals) — détail loggé côté serveur, schéma stable côté appelant,
+    // statut conservé.
+    const text = await upstream.text().catch(() => '')
+    log.warn('upstream_not_ok', {
+      key, model: decision.model, provider: provider.name, status: upstream.status, failedOver,
+      upstreamBody: text.slice(0, 500), durationMs: Date.now() - startedAt,
+    })
     record({ error: true, durationMs: Date.now() - startedAt })
-    return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
+    return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
   }
 
   // ── Streaming: pipe through + inter-chunk watchdog ─────────────────────────

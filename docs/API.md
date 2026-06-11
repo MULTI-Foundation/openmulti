@@ -34,9 +34,12 @@ Réponse : OpenAI standard.
 - En stream, la décision de routage est exposée dans les en-têtes `X-OpenMulti-Model`
   et `X-OpenMulti-Reason`.
 
-Erreurs : `400` (corps invalide), `401`, `413` (corps > limite), `429` (rate limit,
-avec `Retry-After`), `504` (upstream injoignable après retries). Les erreurs upstream
-sont relayées avec leur statut d'origine.
+Erreurs : `400` (corps invalide), `401`, `413` (corps > limite), `429` (rate limit ou
+plafond de dépense, avec `Retry-After`), `504` (upstream injoignable après retries).
+Les erreurs upstream conservent leur **statut** d'origine mais leur corps est
+**normalisé** (`error.type` ∈ `rate_limit_error` | `upstream_rejected` |
+`upstream_error`, `error.code` = statut upstream) — le détail brut n'est jamais relayé.
+Champs de requête inconnus : retirés avant le forward (allowlist OpenAI/OpenRouter).
 
 ## POST /v1/embeddings
 

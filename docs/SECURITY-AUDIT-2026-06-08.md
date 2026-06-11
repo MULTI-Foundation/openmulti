@@ -31,8 +31,8 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 | OM-03 | Moyenne / Moyenne | `/metrics` lisible par **n'importe quelle** clé appelante → fuite cross-tenant de métriques business | **Corrigé (opt-in)** |
 | OM-04 | Moyenne / Faible | Comparaison de clé API non constante en temps (timing attack) | **Corrigé** |
 | OM-05 | Moyenne / Faible | Entrée appelante (`model`, `purpose`) reflétée non-sanitisée dans les en-têtes de réponse (injection d'en-tête / CRLF) | **Corrigé** |
-| OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | Différé (avant exposition publique) |
-| OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | Différé (avant exposition publique) |
+| OM-06 | Faible / Faible | Pass-through non restreint des champs de requête vers l'upstream | **Corrigé** |
+| OM-07 | Faible / Faible | Corps/branche d'erreur upstream renvoyés verbatim (divulgation d'info) | **Corrigé** |
 | OM-08 | Faible / Faible | `/health` non authentifié divulgue la version (fingerprinting) | **Corrigé** |
 | OM-09 | Faible / Faible | Image référencée par tag (`:latest`) et non par digest (immutabilité supply-chain) | **Corrigé en partie** (base épinglée par digest ; reste la signature) |
 | OM-10 | Info / Info | Pas d'arrêt gracieux (SIGTERM) — flux en cours coupés au rollout (disponibilité) | **Corrigé** |
@@ -64,6 +64,22 @@ Chaque finding est noté pour les **deux contextes** : *staging actuel* (réseau
 >
 > Bilan : **7/10 corrigés** (OM-01..05, 08, 10), **3 différés** (OM-06/07/09, tous Faible) avec
 > résolution documentée pour l'avant-public. Aucun finding ouvert sans décision.
+>
+> **Mise à jour 2026-06-11 (gate pré-exposition publique)** — OM-06/07 corrigés (branche
+> `fix/om-06-07-public-gate`), déclenchés par l'achat du domaine openmulti.ai :
+> - **OM-06** : allowlist des champs transmis à l'upstream (`providers/shared.ts`,
+>   champs OpenAI + extensions OpenRouter supportées, vérifiée contre l'usage réel de
+>   MyMULTI). Champ inconnu = retiré (pas de 400), compté
+>   (`openmulti_request_fields_stripped_total`) et loggé une fois par nom. Soupape
+>   sans release : `OPENMULTI_ALLOWED_EXTRA_FIELDS`. Appliquée sur les deux chemins
+>   (OpenRouter, Moonshot direct) et sur /v1/embeddings.
+> - **OM-07** : les corps d'erreur upstream ne sont plus relayés (détail loggé côté
+>   serveur, tronqué 500c) ; l'appelant reçoit un schéma OpenAI-shape stable
+>   (`error.type` par classe de statut, `error.code` = statut upstream conservé).
+>   Vérifié côté MyMULTI : son client fait `response.text()` dans un message
+>   d'exception, aucun parsing structuré — pas de régression.
+> Tests : `test/upstream-policy.test.ts`. Bilan : **9/10 corrigés**, reste OM-09
+> partie signature (cosign), à faire avec la CI publique.
 >
 > **Mise à jour 2026-06-10** — OM-09, partie repo : l'image de base est épinglée par digest
 > (`node:22-alpine@sha256:968df39a…`, manifest list multi-arch) dans le `Dockerfile`, avec la

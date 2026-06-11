@@ -17,7 +17,7 @@ import { computeCostUsd } from '../pricing.js'
 import { injectCostIntoSseData } from '../sse.js'
 import { log } from '../log.js'
 import { recordPricingMiss } from '../metrics.js'
-import { isRetryableStatus } from './shared.js'
+import { isRetryableStatus, pickAllowedFields } from './shared.js'
 import type { ChatRequest } from '../types.js'
 import type { Provider, UpstreamCall } from './types.js'
 
@@ -31,9 +31,10 @@ export function buildMoonshotBody(
   resolvedModel: string,
   maxTokensCeiling?: number,
 ): Record<string, unknown> {
-  // `usage` (usage.include) et `provider` (sort/order/only…) sont des extensions de
-  // requête OpenRouter : elles ne doivent pas fuiter chez Moonshot.
-  const { openmulti: _omit, usage: _usage, provider: _provider, ...rest } = req
+  // OM-06 (allowlist, cf shared.ts) puis hygiène propre à Moonshot : `usage`
+  // (usage.include) et `provider` (sort/order/only…) sont des extensions de requête
+  // OpenRouter, elles ne doivent pas fuiter chez Moonshot.
+  const { usage: _usage, provider: _provider, ...rest } = pickAllowedFields(req)
   const body: Record<string, unknown> = { ...rest, model: moonshotModelId(resolvedModel) }
 
   // Même règle que sur le chemin OpenRouter, pour la même raison : le défaut Moonshot

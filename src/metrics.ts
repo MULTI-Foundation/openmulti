@@ -85,6 +85,14 @@ export function recordMeterDrop(): void {
   meterDrops += 1
 }
 
+// OM-06 : champs de requête hors allowlist retirés avant le forward (les noms sont
+// loggés, pas labellisés — cardinalité non bornée sinon).
+let fieldsStripped = 0
+
+export function recordFieldStripped(): void {
+  fieldsStripped += 1
+}
+
 // Bascules de chemin d'accès (incrément D) : le chemin élu a épuisé ses retries sur
 // une panne transitoire et la requête est repartie sur l'alternative. Un taux élevé
 // = un chemin malade (le bandit le voit aussi via les erreurs enregistrées).
@@ -237,6 +245,10 @@ export function renderProm(): string {
   out.push('# TYPE openmulti_meter_dropped_total counter')
   out.push(`openmulti_meter_dropped_total{} ${meterDrops}`)
 
+  out.push('# HELP openmulti_request_fields_stripped_total Request fields outside the upstream allowlist, removed before forwarding (OM-06).')
+  out.push('# TYPE openmulti_request_fields_stripped_total counter')
+  out.push(`openmulti_request_fields_stripped_total{} ${fieldsStripped}`)
+
   out.push('# HELP openmulti_path_fallback_total Requests that failed over to an alternate access path (same model).')
   out.push('# TYPE openmulti_path_fallback_total counter')
   for (const [id, n] of pathFallbacks) {
@@ -254,4 +266,5 @@ export function _resetMetrics(): void {
   pricingMisses.clear()
   pathFallbacks.clear()
   meterDrops = 0
+  fieldsStripped = 0
 }
