@@ -20,11 +20,16 @@ interface Stat {
   durationCount: number
 }
 
-const SEP = '␟' // unit separator; cannot appear in a key label or model id
+const SEP = '␟' // unit separator; cannot appear in a key label, model id or provider name
 const stats = new Map<string, Stat>()
 
-function bucket(key: string, model: string): Stat {
-  const id = `${key}${SEP}${model}`
+// Le chemin d'accès (openrouter, moonshot, …) est une dimension à part entière depuis
+// l'étape 4 de la spec multi-provider : un même modèle peut être servi par plusieurs
+// chemins, au coût/santé différents. 'openrouter' par défaut (l'unique chemin historique).
+const DEFAULT_PROVIDER = 'openrouter'
+
+function bucket(key: string, model: string, provider: string): Stat {
+  const id = `${key}${SEP}${model}${SEP}${provider}`
   let s = stats.get(id)
   if (!s) {
     s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, durationMsSum: 0, durationCount: 0 }
@@ -49,6 +54,8 @@ export function keyLabel(apiKey: string | undefined): string {
 export interface RequestRecord {
   key: string // already a keyLabel(), not the raw secret
   model: string
+  /** Chemin d'accès qui a porté l'appel (Provider.name). Défaut : openrouter. */
+  provider?: string
   promptTokens?: number
   completionTokens?: number
   costUsd?: number
@@ -56,9 +63,9 @@ export interface RequestRecord {
   error?: boolean
 }
 
-/** A transient upstream failure was retried (same model). */
-export function recordRetry(key: string, model: string): void {
-  bucket(key, model).retries += 1
+/** A transient upstream failure was retried (same model, same access path). */
+export function recordRetry(key: string, model: string, provider = DEFAULT_PROVIDER): void {
+  bucket(key, model, provider).retries += 1
 }
 
 // Trous de tarif : un provider DIRECT a servi un modèle absent de pricing.ts, donc
@@ -89,17 +96,34 @@ export interface ModelAggregate {
 const DECAY_WINDOW = Math.max(0, Number(process.env.OPENMULTI_SMART_DECAY_WINDOW ?? 200))
 const RHO = DECAY_WINDOW > 0 ? 1 - 1 / DECAY_WINDOW : 1
 
+// Clé : `${provider}␟${model}` — le bandit distingue les chemins d'accès (étape 4 :
+// arbitrer moonshot-direct vs openrouter pour un même modèle).
 const bandit = new Map<string, ModelAggregate>()
 
-/** Stats amorties d'un modèle, tous projets confondus (vue de sélection, pas de
- * facturation — les compteurs exposés sur /metrics ne décroissent jamais). */
+/** Stats amorties d'un modèle, tous projets ET chemins d'accès confondus (vue de la
+ * sélection de modèle par tier — le tier ne se soucie pas du chemin). */
 export function modelAggregate(model: string): ModelAggregate {
-  const b = bandit.get(model)
+  const out = { requests: 0, errors: 0, costUsd: 0 }
+  for (const [id, b] of bandit) {
+    if (id.slice(id.indexOf(SEP) + 1) === model) {
+      out.requests += b.requests
+      out.errors += b.errors
+      out.costUsd += b.costUsd
+    }
+  }
+  return out
+}
+
+/** Stats amorties d'un (chemin d'accès, modèle) précis — la vue de l'arbitrage de
+ * chemin (providers/index.ts, mode 'smart'). */
+export function pathAggregate(provider: string, model: string): ModelAggregate {
+  const b = bandit.get(`${provider}${SEP}${model}`)
   return b ? { ...b } : { requests: 0, errors: 0, costUsd: 0 }
 }
 
 export function recordRequest(r: RequestRecord): void {
-  const s = bucket(r.key, r.model)
+  const provider = r.provider ?? DEFAULT_PROVIDER
+  const s = bucket(r.key, r.model, provider)
   s.requests += 1
   if (r.error) s.errors += 1
   if (r.promptTokens) s.promptTokens += r.promptTokens
@@ -117,10 +141,11 @@ export function recordRequest(r: RequestRecord): void {
       b.costUsd *= RHO
     }
   }
-  let b = bandit.get(r.model)
+  const banditId = `${provider}${SEP}${r.model}`
+  let b = bandit.get(banditId)
   if (!b) {
     b = { requests: 0, errors: 0, costUsd: 0 }
-    bandit.set(r.model, b)
+    bandit.set(banditId, b)
   }
   b.requests += 1
   if (r.error) b.errors += 1
@@ -140,37 +165,37 @@ export function renderProm(): string {
   out.push('# HELP openmulti_requests_total Chat completion requests handled.')
   out.push('# TYPE openmulti_requests_total counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_requests_total', `key="${esc(key)}",model="${esc(model)}"`, s.requests)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_requests_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.requests)
   }
 
   out.push('# HELP openmulti_request_errors_total Requests that failed upstream.')
   out.push('# TYPE openmulti_request_errors_total counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_request_errors_total', `key="${esc(key)}",model="${esc(model)}"`, s.errors)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_request_errors_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.errors)
   }
 
   out.push('# HELP openmulti_retries_total Transient upstream failures retried (same model).')
   out.push('# TYPE openmulti_retries_total counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_retries_total', `key="${esc(key)}",model="${esc(model)}"`, s.retries)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_retries_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.retries)
   }
 
   out.push('# HELP openmulti_tokens_total Tokens billed by the upstream provider.')
   out.push('# TYPE openmulti_tokens_total counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",kind="prompt"`, s.promptTokens)
-    line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",kind="completion"`, s.completionTokens)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}",kind="prompt"`, s.promptTokens)
+    line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}",kind="completion"`, s.completionTokens)
   }
 
   out.push('# HELP openmulti_cost_usd_total Upstream cost in USD (from usage.cost).')
   out.push('# TYPE openmulti_cost_usd_total counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_cost_usd_total', `key="${esc(key)}",model="${esc(model)}"`, s.costUsd)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_cost_usd_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.costUsd)
   }
 
   // Duration as sum+count so a scraper can compute the average (avg = sum / count).
@@ -179,9 +204,9 @@ export function renderProm(): string {
   out.push('# HELP openmulti_request_duration_ms_count Requests timed.')
   out.push('# TYPE openmulti_request_duration_ms_count counter')
   for (const [id, s] of stats) {
-    const [key, model] = id.split(SEP) as [string, string]
-    line('openmulti_request_duration_ms_sum', `key="${esc(key)}",model="${esc(model)}"`, s.durationMsSum)
-    line('openmulti_request_duration_ms_count', `key="${esc(key)}",model="${esc(model)}"`, s.durationCount)
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_request_duration_ms_sum', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.durationMsSum)
+    line('openmulti_request_duration_ms_count', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.durationCount)
   }
 
   out.push('# HELP openmulti_pricing_miss_total Direct-provider responses whose cost could not be synthesized (model missing from pricing.ts).')
