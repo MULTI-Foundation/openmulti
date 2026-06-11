@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { auth, metricsAuth } from './auth.js'
 import { rateLimit } from './ratelimit.js'
 import { chat } from './routes/chat.js'
+import { models } from './routes/models.js'
 import { renderProm } from './metrics.js'
 import { config } from './config.js'
 import type { AppEnv } from './types.js'
@@ -36,3 +37,4 @@ app.use('/v1/*', async (c, next) => {
 app.use('/v1/*', auth)
 app.use('/v1/*', rateLimit)
 app.route('/', chat)
+app.route('/', models)
