@@ -98,10 +98,14 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
 ## Two files hold the only knobs that matter
 
 - **`src/catalog.ts`** — the *single* place mapping tier → **candidate models** (`candidatesFor`,
-  ordered; the **first is the iso primary**) plus per-task overrides (`purpose: 'agent'` → a code
-  model on balanced/quality). Config precedence per slot: plural env `OPENMULTI_MODELS_[PURPOSE_]TIER`
-  (full set) > singular `OPENMULTI_MODEL_[PURPOSE_]TIER` (back-compat) > built-in default. Changing
-  "which model is economy/balanced/quality" happens here, and *no consuming project changes a line*.
+  ordered; the **first is the primary**) plus per-task overrides (`purpose: 'agent'` → code models
+  on balanced/quality). Built-in defaults are the **curated sets of 2026-06-11** (ids/prices
+  verified against the OpenRouter API; historical primaries kept, except quality →
+  `anthropic/claude-opus-4.8`, a maintainer decision). Config precedence per slot: **runtime admin
+  override** (`PUT /admin/catalog/:slot`, Redis-backed via `catalog-overrides.ts` — change the
+  catalog without a deploy, ≤10s propagation, fail-open) > plural env
+  `OPENMULTI_MODELS_[PURPOSE_]TIER` > singular `OPENMULTI_MODEL_[PURPOSE_]TIER` (back-compat —
+  beware: it replaces a whole set with one model) > built-in. No consuming project changes a line.
 - **`src/select.ts`** — picks one candidate (the v1 "intelligence" seam). `default` returns the
   first candidate (= iso, the contract-locked behavior); `smart` is a deterministic **discounted
   bandit** (no RNG) over the metrics registry: observed stats decay per observation

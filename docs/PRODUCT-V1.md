@@ -60,7 +60,7 @@
 | D | Fallback cross-provider (entre chemins du même modèle, `pathsFor`) | ✅ |
 | E | Embeddings (`/v1/embeddings`) + contrat tools/structured outputs (cas 6a/6b) | ✅ |
 | F | Rate-limit sur l'état partagé (compteur Valkey, repli mémoire) | ✅ |
-| G | Curation catalogue (continu) | |
+| G | Curation catalogue (sets vérifiés 2026-06-11) + pilotage à la volée (`/admin/catalog`) | ✅ |
 
 > Choix d'image acté le 11 juin : **Valkey** (fork Redis, Linux Foundation, BSD) —
 > protocole et client identiques, licence sans ambiguïté. Activation staging : les

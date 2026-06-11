@@ -5,8 +5,10 @@
 import { Hono } from 'hono'
 import { readUsage } from '../meter.js'
 import { createKey, revokeKey, listKeys, setCap } from '../keys.js'
+import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../catalog-overrides.js'
+import { candidatesFor } from '../catalog.js'
 import { log } from '../log.js'
-import type { AppEnv } from '../types.js'
+import type { AppEnv, Tier } from '../types.js'
 
 export const admin = new Hono<AppEnv>()
 
@@ -49,6 +51,43 @@ admin.delete('/admin/keys/:id', async (c) => {
   if (!ok) return c.json({ error: { message: 'Unknown key id (or registry disabled)', type: 'not_found' } }, 404)
   log.info('admin_key_revoked', { id: c.req.param('id') })
   return c.json({ revoked: c.req.param('id') })
+})
+
+// ── Catalogue « à la volée » ────────────────────────────────────────────────────
+// GET  /admin/catalog              -> overrides actifs + sets effectifs par tier.
+// PUT  /admin/catalog/:slot        -> { models: ["vendor/model", ...] } (1..8, le 1er = primaire)
+// DELETE /admin/catalog/:slot      -> retombe sur env puis défauts du code.
+
+admin.get('/admin/catalog', (c) => {
+  const tiers: Tier[] = ['economy', 'balanced', 'quality']
+  return c.json({
+    overrides: listCatalogOverrides(),
+    effective: Object.fromEntries([
+      ...tiers.map((t) => [t, candidatesFor(t)]),
+      ...tiers.map((t) => [`agent_${t}`, candidatesFor(t, 'agent')]),
+    ]),
+  })
+})
+
+admin.put('/admin/catalog/:slot', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { models?: string[] } | null
+  if (!body?.models) {
+    return c.json({ error: { message: '`models` is required (ordered array, first = primary)', type: 'invalid_request_error' } }, 400)
+  }
+  const err = await setCatalogSlot(c.req.param('slot'), body.models)
+  if (err) {
+    const disabled = err.includes('REDIS_URL')
+    return c.json({ error: { message: err, type: disabled ? 'catalog_disabled' : 'invalid_request_error' } }, disabled ? 503 : 400)
+  }
+  log.info('admin_catalog_set', { slot: c.req.param('slot'), models: body.models })
+  return c.json({ slot: c.req.param('slot'), models: body.models })
+})
+
+admin.delete('/admin/catalog/:slot', async (c) => {
+  const ok = await deleteCatalogSlot(c.req.param('slot'))
+  if (!ok) return c.json({ error: { message: 'No override on this slot (or store disabled)', type: 'not_found' } }, 404)
+  log.info('admin_catalog_cleared', { slot: c.req.param('slot') })
+  return c.json({ cleared: c.req.param('slot') })
 })
 
 // PUT /admin/caps/:project { usdPerDay } -> plafond journalier du projet (0 = retire).
