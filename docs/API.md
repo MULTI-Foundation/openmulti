@@ -52,6 +52,20 @@ Prometheus, authentifié (token ops dédié ou clé appelante). Compteurs par
 projet × modèle × chemin d'accès. Réservé à l'exploitation — voir
 `docs/OBSERVABILITY-SETUP.md`.
 
+## Administration des clés et plafonds (ops)
+
+Token ops strictement requis (comme `/admin/usage`).
+
+- `POST /admin/keys {project, capUsdPerDay?}` → `{key, id, project}` — le secret n'est
+  retourné **qu'à la création**. Le projet doit matcher `^[a-z0-9-]{1,32}$`.
+- `GET /admin/keys` → liste **rédigée** (id, projet, date, état, plafond — jamais le secret).
+- `DELETE /admin/keys/:id` → révocation (effet immédiat sur le pod local, ≤ 10 s ailleurs).
+- `PUT /admin/caps/:project {usdPerDay}` → plafond de dépense **journalier (UTC), par
+  projet** (l'unité de facturation — toutes les clés d'un projet le partagent ; `0` le
+  retire). Plafond atteint → les requêtes du projet reçoivent `429`
+  `spend_cap_exceeded` avec `Retry-After` jusqu'à minuit UTC. Sans plafond : aucun
+  changement. Panne du store : fail-open (le trafic n'est jamais coupé par une panne Redis).
+
 ## GET /admin/usage (ops)
 
 `?key=<projet>&days=<n>` — l'usage **durable** d'un projet (requêtes, erreurs, tokens,

@@ -140,9 +140,15 @@ must be treated as such (coordinate, don't just make the test pass).
 
 ## Auth & deploy
 
-- **Auth** (`src/auth.ts`): v0 is a static Bearer allowlist (`OPENMULTI_API_KEYS`, comma-separated;
-  empty = open, dev only). Each consuming project gets its own `sk_` key. OpenMulti knows nothing
-  about the caller's tenants — the key is only for future per-key metering.
+- **Auth** (`src/auth.ts`): Bearer allowlist = env keys (`OPENMULTI_API_KEYS`, comma-separated)
+  ∪ the dynamic registry (`src/keys.ts`, Redis-backed, in-memory cache refreshed every 10s and
+  immediately after a local admin mutation; both empty = open, dev only). Each consuming project
+  gets its own `sk_<project>_…` key. Keys are created/revoked via `POST/DELETE /admin/keys`
+  (strict ops token; the secret is returned only at creation, listings are redacted). **Spend
+  caps are per PROJECT** (the billing unit): `PUT /admin/caps/:project`, enforced in
+  `routes/chat.ts` from memory only (zero I/O on the hot path; local costs accumulate between
+  refreshes) → 429 `spend_cap_exceeded` + Retry-After to UTC midnight. Store down = fail-open —
+  a Redis outage never cuts traffic. OpenMulti still knows nothing about the caller's tenants.
 - **Deploy**: push to `main` → CI (`.github/workflows/ci.yml`) runs typecheck + contract test, builds
   & pushes a multi-stage image to GHCR, then `kubectl set image` rolls it out to the **`openmulti-staging`**
   k3s namespace (dedicated, isolated from `multi-staging`). Manifests in `deploy/staging.yaml`.

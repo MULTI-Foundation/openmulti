@@ -5,6 +5,7 @@
 import type { MiddlewareHandler } from 'hono'
 import { timingSafeEqual } from 'node:crypto'
 import { config } from './config.js'
+import { registryApiKeys } from './keys.js'
 import type { AppEnv } from './types.js'
 
 /** Constant-time string compare (avoids leaking a token via response timing). */
@@ -21,12 +22,14 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   const key = header.slice(7)
 
-  // Empty allowlist = open (dev only). In any deployed env, set OPENMULTI_API_KEYS.
+  // Allowlist = clés env (OPENMULTI_API_KEYS) ∪ registre dynamique (keys.ts, cache
+  // mémoire — les clés révoquées en sortent au refresh). Vide = open (dev only).
   // OM-04: constant-time compare, and don't short-circuit on the matching key, so
   // neither the key content nor which key matched leaks through response timing.
-  if (config.apiKeys.length > 0) {
+  const allowlist = [...config.apiKeys, ...registryApiKeys()]
+  if (allowlist.length > 0) {
     let ok = false
-    for (const allowed of config.apiKeys) if (safeEqual(key, allowed)) ok = true
+    for (const allowed of allowlist) if (safeEqual(key, allowed)) ok = true
     if (!ok) return c.json({ error: { message: 'Invalid API key', type: 'auth_error' } }, 401)
   }
 

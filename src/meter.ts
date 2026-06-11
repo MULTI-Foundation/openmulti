@@ -14,48 +14,18 @@
 //     ne casse aucun appel — les écritures perdues sont comptées dans
 //     openmulti_meter_dropped_total (et un log au changement d'état, pas par requête).
 
-import { createClient } from 'redis'
-import { config } from './config.js'
+import { storeClient, storeHealthy, _setStoreClientForTests, type StoreClient } from './store.js'
 import { log } from './log.js'
 import { recordMeterDrop } from './metrics.js'
 import type { RequestRecord } from './metrics.js'
 
-/** Le sous-ensemble du client redis utilisé — injectable pour les tests. */
-export interface MeterClient {
-  hIncrBy(key: string, field: string, n: number): Promise<unknown>
-  hIncrByFloat(key: string, field: string, n: number): Promise<unknown>
-  expire(key: string, seconds: number, mode?: 'NX'): Promise<unknown>
-  hGetAll(key: string): Promise<Record<string, string>>
-}
+/** @deprecated alias historique — le client vit dans store.ts désormais. */
+export type MeterClient = StoreClient
 
 const TTL_SECONDS = 400 * 24 * 3600 // ~13 mois : couvre le mois facturé + litiges
 
-let client: MeterClient | null = null
-let healthy = false
-
-/** Câblage production : appelé au boot (index.ts). No-op sans REDIS_URL. */
-export function initMeter(): void {
-  if (!config.redisUrl) return
-  const c = createClient({ url: config.redisUrl })
-  c.on('error', (e: Error) => {
-    if (healthy) log.warn('meter_redis_down', { error: e.message })
-    healthy = false
-  })
-  c.on('ready', () => {
-    if (!healthy) log.info('meter_redis_ready', {})
-    healthy = true
-  })
-  // connect() rejette si le premier essai échoue, mais le client retente ensuite
-  // tout seul (reconnect strategy par défaut) — on ne bloque jamais le boot.
-  c.connect().catch((e: Error) => log.warn('meter_redis_connect_failed', { error: e.message }))
-  client = c as unknown as MeterClient
-}
-
-/** Injection pour les tests (et _resetMeter pour l'isolation entre cas). */
-export function _setMeterClientForTests(c: MeterClient | null, ready = true): void {
-  client = c
-  healthy = c !== null && ready
-}
+/** Injection pour les tests (délègue au store partagé). */
+export const _setMeterClientForTests = _setStoreClientForTests
 
 export function meterDay(now = new Date()): string {
   return now.toISOString().slice(0, 10) // jour UTC — la facturation est en UTC
@@ -66,12 +36,12 @@ const meterKey = (keyLabel: string, day: string) => `meter:${keyLabel}:${day}`
 /** Écriture durable d'une requête servie. Fire-and-forget : ne bloque ni n'échoue
  * jamais le chemin de la réponse. */
 export function meterUsage(r: RequestRecord): void {
-  if (!client) return
-  if (!healthy) {
+  const c = storeClient()
+  if (!c) return
+  if (!storeHealthy()) {
     recordMeterDrop()
     return
   }
-  const c = client
   const key = meterKey(r.key, meterDay())
   const f = (metric: string) => `${r.model}|${r.provider ?? 'openrouter'}|${metric}`
   const writes: Promise<unknown>[] = [c.hIncrBy(key, f('requests'), 1)]
@@ -82,7 +52,7 @@ export function meterUsage(r: RequestRecord): void {
   writes.push(c.expire(key, TTL_SECONDS, 'NX'))
   void Promise.all(writes).catch((e: Error) => {
     recordMeterDrop()
-    if (healthy) log.warn('meter_write_failed', { error: e.message })
+    if (storeHealthy()) log.warn('meter_write_failed', { error: e.message })
   })
 }
 
@@ -118,12 +88,13 @@ const FIELD_TO_PROP: Record<string, keyof UsageBreakdown> = {
 /** Lecture agrégée sur les `days` derniers jours (inclus aujourd'hui, UTC). Les clés
  * se reconstruisent par dates — pas de SCAN. */
 export async function readUsage(keyLabel: string, days: number, now = new Date()): Promise<UsageReport | null> {
-  if (!client) return null
+  const c = storeClient()
+  if (!c) return null
   const report: UsageReport = { key: keyLabel, from: '', to: meterDay(now), totals: zero(), byModel: {}, byDay: {} }
   for (let i = days - 1; i >= 0; i--) {
     const day = meterDay(new Date(now.getTime() - i * 24 * 3600 * 1000))
     if (!report.from) report.from = day
-    const hash = await client.hGetAll(meterKey(keyLabel, day))
+    const hash = await c.hGetAll(meterKey(keyLabel, day))
     for (const [field, raw] of Object.entries(hash)) {
       const sep = field.lastIndexOf('|')
       const series = field.slice(0, sep) // `${model}|${provider}`
