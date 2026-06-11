@@ -97,15 +97,17 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
 
 ## Two files hold the only knobs that matter
 
-- **`src/catalog.ts`** — the *single* place mapping tier → **candidate models** (`candidatesFor`,
-  ordered; the **first is the primary**) plus per-task overrides (`purpose: 'agent'` → code models
-  on balanced/quality). Built-in defaults are the **curated sets of 2026-06-11** (ids/prices
-  verified against the OpenRouter API; historical primaries kept, except quality →
-  `anthropic/claude-opus-4.8`, a maintainer decision). Config precedence per slot: **runtime admin
-  override** (`PUT /admin/catalog/:slot`, Redis-backed via `catalog-overrides.ts` — change the
-  catalog without a deploy, ≤10s propagation, fail-open) > plural env
-  `OPENMULTI_MODELS_[PURPOSE_]TIER` > singular `OPENMULTI_MODEL_[PURPOSE_]TIER` (back-compat —
-  beware: it replaces a whole set with one model) > built-in. No consuming project changes a line.
+- **`src/catalog.ts`** — tier → **candidate models** (`candidatesFor`, ordered; the **first is
+  the primary**) plus per-task overrides (`purpose: 'agent'`). **The real mapping is operating
+  config, never committed** — it is part of OpenMulti's value (maintainer decision 2026-06-11).
+  It lives in a local catalog file (`OPENMULTI_CATALOG_FILE` → `catalog-file.ts`;
+  `catalog.local.json` gitignored locally, ConfigMap created out-of-band in-cluster, format in
+  `catalog.example.json`, read once at boot). Built-in defaults are a minimal NEUTRAL fallback —
+  do not put curation there. Config precedence per slot: **runtime admin override**
+  (`PUT /admin/catalog/:slot`, Redis via `catalog-overrides.ts` — hot, ≤10s, fail-open) >
+  catalog file > plural env `OPENMULTI_MODELS_[PURPOSE_]TIER` > singular
+  `OPENMULTI_MODEL_[PURPOSE_]TIER` (beware: replaces a whole set with one model) > neutral
+  built-in. No consuming project changes a line.
 - **`src/select.ts`** — picks one candidate (the v1 "intelligence" seam). `default` returns the
   first candidate (= iso, the contract-locked behavior); `smart` is a deterministic **discounted
   bandit** (no RNG) over the metrics registry: observed stats decay per observation

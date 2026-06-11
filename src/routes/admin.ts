@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { readUsage } from '../meter.js'
 import { createKey, revokeKey, listKeys, setCap } from '../keys.js'
 import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../catalog-overrides.js'
+import { catalogFileSlots } from '../catalog-file.js'
 import { candidatesFor } from '../catalog.js'
 import { log } from '../log.js'
 import type { AppEnv, Tier } from '../types.js'
@@ -62,6 +63,7 @@ admin.get('/admin/catalog', (c) => {
   const tiers: Tier[] = ['economy', 'balanced', 'quality']
   return c.json({
     overrides: listCatalogOverrides(),
+    file: catalogFileSlots(),
     effective: Object.fromEntries([
       ...tiers.map((t) => [t, candidatesFor(t)]),
       ...tiers.map((t) => [`agent_${t}`, candidatesFor(t, 'agent')]),
