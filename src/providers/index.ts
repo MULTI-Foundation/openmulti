@@ -43,4 +43,23 @@ export function providerFor(model: string): Provider {
   return openRouterProvider
 }
 
+// Fallback de chemin (incrément D, docs/PRODUCT-V1.md) : actif par défaut dès qu'un
+// modèle a plus d'un chemin d'accès configuré ; OPENMULTI_PATH_FALLBACK=0 le coupe.
+const PATH_FALLBACK = process.env.OPENMULTI_PATH_FALLBACK !== '0'
+
+/**
+ * Chemins d'accès ordonnés pour ce modèle : l'élu d'abord (providerFor), puis les
+ * alternatives vers lesquelles basculer si l'élu épuise ses retries sur une panne
+ * transitoire — MÊME modèle, donc la réponse est préservée (le fallback cross-MODEL,
+ * qui change la réponse, reste hors périmètre). Un seul chemin = comportement actuel.
+ */
+export function pathsFor(model: string): Provider[] {
+  const elected = providerFor(model)
+  if (PATH_FALLBACK && model.startsWith('moonshotai/') && moonshotMode !== 'openrouter') {
+    const alternate = elected.name === 'moonshot' ? openRouterProvider : moonshotProvider
+    return [elected, alternate]
+  }
+  return [elected]
+}
+
 export type { Provider, UpstreamCall } from './types.js'
