@@ -10,6 +10,32 @@ export interface SseUsage {
   cost?: number
 }
 
+/**
+ * Injecte un `usage.cost` synthétisé dans une ligne SSE `data: {...}` qui porte un
+ * bloc usage SANS cost (cas des providers directs : Moonshot & co ne facturent pas
+ * dans la réponse, contrairement à OpenRouter — or usage.cost est le point de
+ * couplage #1 du contrat). Retourne la ligne réécrite, ou `null` si la ligne n'est
+ * pas concernée (à transmettre telle quelle — c'est le cas de quasi tout le flux).
+ * Pure : le calcul du coût est injecté en callback (pricing.ts reste découplé d'ici).
+ */
+export function injectCostIntoSseData(
+  line: string,
+  computeCost: (promptTokens: number, completionTokens: number) => number | undefined,
+): string | null {
+  if (!line.startsWith('data: ') || line.includes('[DONE]')) return null
+  let parsed: { usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: unknown } }
+  try {
+    parsed = JSON.parse(line.slice(6))
+  } catch {
+    return null
+  }
+  if (!parsed.usage || typeof parsed.usage !== 'object' || typeof parsed.usage.cost === 'number') return null
+  const cost = computeCost(parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0)
+  if (cost === undefined) return null // modèle non tarifé : ne rien inventer (cf pricing.ts)
+  parsed.usage.cost = cost
+  return `data: ${JSON.stringify(parsed)}`
+}
+
 export class SseUsageScanner {
   private buffer = ''
   usage: SseUsage | null = null

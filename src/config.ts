@@ -11,6 +11,13 @@ export const config = {
     apiKey: required('OPENROUTER_API_KEY'),
     baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   },
+  // Chemin d'accès direct Moonshot/Kimi (étape 3 de la spec multi-provider). La clé
+  // est OPTIONNELLE : sans elle, tout passe par OpenRouter (défaut iso). Endpoint
+  // vérifié 2026-06-10 : platform.kimi.ai/docs/api/chat.
+  moonshot: {
+    apiKey: process.env.MOONSHOT_API_KEY || '',
+    baseUrl: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1',
+  },
   // Attribution headers forwarded to the upstream provider.
   referer: process.env.OPENMULTI_REFERER || 'https://openmulti.ai',
   title: process.env.OPENMULTI_TITLE || 'OpenMulti',
