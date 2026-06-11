@@ -48,3 +48,19 @@ export const metricsAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   await next()
 }
+
+// Garde des routes /admin/* (metering, et bientôt cycle de vie des clés) : token ops
+// STRICTEMENT requis — pas de fallback sur les clés appelantes (un projet ne doit
+// jamais lire l'usage des autres). Sans token configuré, l'admin est simplement
+// désactivée (503) : opt-in, zéro régression.
+export const adminAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!config.metricsToken) {
+    return c.json({ error: { message: 'Admin API disabled (set OPENMULTI_METRICS_TOKEN)', type: 'admin_disabled' } }, 503)
+  }
+  const header = c.req.header('authorization')
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : ''
+  if (!token || !safeEqual(token, config.metricsToken)) {
+    return c.json({ error: { message: 'Invalid admin token', type: 'auth_error' } }, 401)
+  }
+  await next()
+}

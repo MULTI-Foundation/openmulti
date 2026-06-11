@@ -77,6 +77,14 @@ export function recordPricingMiss(model: string): void {
   pricingMisses.set(model, (pricingMisses.get(model) ?? 0) + 1)
 }
 
+// Écritures de metering durable perdues (Redis indisponible) — cf meter.ts. Si ça
+// monte, la facturation sous-compte : c'est une alerte, pas un détail.
+let meterDrops = 0
+
+export function recordMeterDrop(): void {
+  meterDrops += 1
+}
+
 export interface ModelAggregate {
   requests: number
   errors: number
@@ -215,6 +223,10 @@ export function renderProm(): string {
     line('openmulti_pricing_miss_total', `model="${esc(model)}"`, n)
   }
 
+  out.push('# HELP openmulti_meter_dropped_total Durable metering writes lost (Redis unavailable) - billing undercounts when > 0.')
+  out.push('# TYPE openmulti_meter_dropped_total counter')
+  out.push(`openmulti_meter_dropped_total{} ${meterDrops}`)
+
   return out.join('\n') + '\n'
 }
 
@@ -223,4 +235,5 @@ export function _resetMetrics(): void {
   stats.clear()
   bandit.clear()
   pricingMisses.clear()
+  meterDrops = 0
 }

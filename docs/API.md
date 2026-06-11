@@ -51,3 +51,11 @@ OpenRouter, le coût réel arrive par réponse dans `usage.cost`).
 Prometheus, authentifié (token ops dédié ou clé appelante). Compteurs par
 projet × modèle × chemin d'accès. Réservé à l'exploitation — voir
 `docs/OBSERVABILITY-SETUP.md`.
+
+## GET /admin/usage (ops)
+
+`?key=<projet>&days=<n>` — l'usage **durable** d'un projet (requêtes, erreurs, tokens,
+coût USD) agrégé sur la fenêtre : totaux, par modèle×chemin, par jour UTC. C'est la
+source pour facturer (survit aux restarts, contrairement à /metrics). Token ops
+strictement requis (`OPENMULTI_METRICS_TOKEN`) — une clé appelante est refusée.
+`503` si le metering n'est pas configuré (`REDIS_URL`).

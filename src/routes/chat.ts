@@ -10,7 +10,8 @@ import { route } from '../router.js'
 import { providerFor } from '../providers/index.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
-import { recordRequest, recordRetry, keyLabel } from '../metrics.js'
+import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
+import { meterUsage } from '../meter.js'
 import { SseUsageScanner } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
@@ -56,6 +57,14 @@ chat.post('/v1/chat/completions', async (c) => {
   const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
   const isStream = req.stream === true
 
+  // Une observation = deux écritures : Prometheus (monitoring, in-memory) et le
+  // metering durable (facturation, Redis, fire-and-forget — cf meter.ts).
+  const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
+    const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
+    recordRequest(rec)
+    meterUsage(rec)
+  }
+
   log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })
 
   // Bounded retry on transient upstream failures, SAME model. We retry to ride out a
@@ -77,7 +86,7 @@ chat.post('/v1/chat/completions', async (c) => {
         continue
       }
       log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-      recordRequest({ key, model: decision.model, provider: provider.name, error: true, durationMs: Date.now() - startedAt })
+      record({ error: true, durationMs: Date.now() - startedAt })
       return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
     }
 
@@ -97,7 +106,7 @@ chat.post('/v1/chat/completions', async (c) => {
   if (!upstream.ok) {
     const text = await upstream.text()
     log.warn('upstream_not_ok', { key, model: decision.model, status: upstream.status, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-    recordRequest({ key, model: decision.model, provider: provider.name, error: true, durationMs: Date.now() - startedAt })
+    record({ error: true, durationMs: Date.now() - startedAt })
     return new Response(text, { status: upstream.status, headers: { 'Content-Type': 'application/json' } })
   }
 
@@ -136,8 +145,8 @@ chat.post('/v1/chat/completions', async (c) => {
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
-          recordRequest({
-            key, model: decision.model, provider: provider.name, error: stalled,
+          record({
+            error: stalled,
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             costUsd: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
@@ -177,8 +186,7 @@ chat.post('/v1/chat/completions', async (c) => {
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     cost: u?.cost, durationMs: Date.now() - startedAt,
   })
-  recordRequest({
-    key, model: decision.model, provider: provider.name,
+  record({
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     costUsd: u?.cost, durationMs: Date.now() - startedAt,
   })
