@@ -140,6 +140,17 @@ spec:
           podSelector: { matchLabels: { app: multi-app } }
       ports: [{ port: 8080, protocol: TCP }]
 ---
+# La console (meme namespace) joint le gateway en interne (API admin + /v1/models).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-from-console, namespace: openmulti-staging }
+spec:
+  podSelector: { matchLabels: { app: openmulti } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: openmulti-console } } }]
+      ports: [{ port: 8080, protocol: TCP }]
+---
 # Exposition publique (api-staging.openmulti.ai) : Traefik (kube-system) doit pouvoir
 # joindre openmulti — le namespace est default-deny. Activee apres le gate OM-06/07
 # (audit 9/10, 2026-06-11). L'auth Bearer reste obligatoire sur /v1/* et /admin/*.
