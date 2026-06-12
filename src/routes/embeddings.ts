@@ -16,7 +16,7 @@ import { isRetryableStatus, backoff, pickAllowedFields, normalizedUpstreamError,
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight } from '../keys.js'
+import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
 import type { AppEnv } from '../types.js'
 
 export const embeddings = new Hono<AppEnv>()
@@ -51,11 +51,13 @@ embeddings.post('/v1/embeddings', async (c) => {
   const model = typeof rest.model === 'string' && rest.model !== 'auto' ? rest.model : EMBEDDING_MODEL
   const body = { ...rest, model }
 
+  const marginFactor = 1 + marginFor(key) / 100
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model, provider: 'openrouter', ...r }
+    if (rec.costUsd) rec.billedUsd = rec.costUsd * marginFactor
     recordRequest(rec)
     meterUsage(rec)
-    if (rec.costUsd) noteLocalSpend(key, rec.costUsd)
+    if (rec.billedUsd) noteLocalSpend(key, rec.billedUsd)
   }
 
   log.info('embeddings_request', { key, model })
@@ -110,8 +112,12 @@ embeddings.post('/v1/embeddings', async (c) => {
     return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
   }
 
-  const data = (await upstream.json()) as Record<string, unknown>
+  let data = (await upstream.json()) as Record<string, unknown>
   const u = data.usage as { prompt_tokens?: number; total_tokens?: number; cost?: number } | undefined
+  // Marge : le client voit son prix (facteur 1 = objet intact, byte-identique).
+  if (marginFactor > 1 && u && typeof u.cost === 'number') {
+    data = { ...data, usage: { ...u, cost: u.cost * marginFactor } }
+  }
   log.info('embeddings_completed', { key, model, promptTokens: u?.prompt_tokens, cost: u?.cost, durationMs: Date.now() - startedAt })
   record({ promptTokens: u?.prompt_tokens, costUsd: u?.cost, durationMs: Date.now() - startedAt })
 

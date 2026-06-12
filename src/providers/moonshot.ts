@@ -14,7 +14,7 @@
 
 import { config } from '../config.js'
 import { computeCostUsd } from '../pricing.js'
-import { injectCostIntoSseData } from '../sse.js'
+import { injectCostIntoSseData, sseLineTransform } from '../sse.js'
 import { log } from '../log.js'
 import { recordPricingMiss } from '../metrics.js'
 import { isRetryableStatus, pickAllowedFields } from './shared.js'
@@ -105,34 +105,16 @@ export function normalizeMoonshotResponse(
   return { ...data, usage: { ...u, cost } }
 }
 
-/** Réécrit le flux SSE ligne à ligne : tout passe tel quel, sauf l'événement qui porte
- * le bloc usage sans cost, où le coût synthétisé est injecté. Le découpage en lignes
- * tolère un événement coupé entre deux chunks (même précaution que SseUsageScanner). */
+/** Réécrit le flux SSE : tout passe tel quel, sauf l'événement qui porte le bloc
+ * usage sans cost, où le coût synthétisé est injecté (plomberie partagée
+ * sseLineTransform, cf sse.ts). */
 export function adaptMoonshotStream(
   upstream: ReadableStream<Uint8Array>,
   model: string,
 ): ReadableStream<Uint8Array> {
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-  let buffer = ''
-
-  const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      buffer += decoder.decode(chunk, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? '' // garde la ligne (potentiellement) partielle
-      for (const line of lines) {
-        const injected = injectCostIntoSseData(line, (pt, ct) => costOrMiss(model, pt, ct))
-        controller.enqueue(encoder.encode(`${injected ?? line}\n`))
-      }
-    },
-    flush(controller) {
-      buffer += decoder.decode()
-      if (buffer) controller.enqueue(encoder.encode(buffer))
-    },
-  })
-
-  return upstream.pipeThrough(transform)
+  return sseLineTransform(upstream, (line) =>
+    injectCostIntoSseData(line, (pt, ct) => costOrMiss(model, pt, ct)),
+  )
 }
 
 export const moonshotProvider: Provider = {

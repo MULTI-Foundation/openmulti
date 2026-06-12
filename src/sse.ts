@@ -10,30 +10,83 @@ export interface SseUsage {
   cost?: number
 }
 
+export interface SseUsageBlock {
+  prompt_tokens?: number
+  completion_tokens?: number
+  cost?: unknown
+}
+
 /**
- * Injecte un `usage.cost` synthétisé dans une ligne SSE `data: {...}` qui porte un
- * bloc usage SANS cost (cas des providers directs : Moonshot & co ne facturent pas
- * dans la réponse, contrairement à OpenRouter — or usage.cost est le point de
- * couplage #1 du contrat). Retourne la ligne réécrite, ou `null` si la ligne n'est
- * pas concernée (à transmettre telle quelle — c'est le cas de quasi tout le flux).
- * Pure : le calcul du coût est injecté en callback (pricing.ts reste découplé d'ici).
+ * Applique un mutateur au bloc `usage` d'une ligne SSE `data: {...}`. Retourne la
+ * ligne réécrite si le mutateur a rendu `true`, sinon `null` (ligne à transmettre
+ * telle quelle — le cas de quasi tout le flux : deltas, [DONE], commentaires).
+ * Pure et générique : sert à la fois à l'injection du coût synthétisé (providers
+ * directs) et à l'application de la marge (modèle de revenus).
  */
-export function injectCostIntoSseData(
+export function mutateSseUsageLine(
   line: string,
-  computeCost: (promptTokens: number, completionTokens: number) => number | undefined,
+  mutate: (usage: SseUsageBlock) => boolean,
 ): string | null {
   if (!line.startsWith('data: ') || line.includes('[DONE]')) return null
-  let parsed: { usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: unknown } }
+  let parsed: { usage?: SseUsageBlock }
   try {
     parsed = JSON.parse(line.slice(6))
   } catch {
     return null
   }
-  if (!parsed.usage || typeof parsed.usage !== 'object' || typeof parsed.usage.cost === 'number') return null
-  const cost = computeCost(parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0)
-  if (cost === undefined) return null // modèle non tarifé : ne rien inventer (cf pricing.ts)
-  parsed.usage.cost = cost
+  if (!parsed.usage || typeof parsed.usage !== 'object') return null
+  if (!mutate(parsed.usage)) return null
   return `data: ${JSON.stringify(parsed)}`
+}
+
+/**
+ * Injecte un `usage.cost` synthétisé dans une ligne SSE qui porte un bloc usage SANS
+ * cost (providers directs : Moonshot & co ne facturent pas dans la réponse, or
+ * usage.cost est le point de couplage #1 du contrat).
+ */
+export function injectCostIntoSseData(
+  line: string,
+  computeCost: (promptTokens: number, completionTokens: number) => number | undefined,
+): string | null {
+  return mutateSseUsageLine(line, (usage) => {
+    if (typeof usage.cost === 'number') return false
+    const cost = computeCost(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0)
+    if (cost === undefined) return false // modèle non tarifé : ne rien inventer (cf pricing.ts)
+    usage.cost = cost
+    return true
+  })
+}
+
+/**
+ * Transforme un flux SSE ligne à ligne : chaque ligne complète passe par `perLine`
+ * (null = inchangée) ; le découpage tolère un événement coupé entre deux chunks
+ * (même précaution que SseUsageScanner). Tout ce qui n'est pas réécrit passe
+ * verbatim. Plomberie partagée entre adaptateurs de provider et marge.
+ */
+export function sseLineTransform(
+  upstream: ReadableStream<Uint8Array>,
+  perLine: (line: string) => string | null,
+): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let buffer = ''
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? '' // garde la ligne (potentiellement) partielle
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(`${perLine(line) ?? line}\n`))
+      }
+    },
+    flush(controller) {
+      buffer += decoder.decode()
+      if (buffer) controller.enqueue(encoder.encode(buffer))
+    },
+  })
+
+  return upstream.pipeThrough(transform)
 }
 
 export class SseUsageScanner {

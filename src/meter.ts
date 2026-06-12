@@ -49,6 +49,7 @@ export function meterUsage(r: RequestRecord): void {
   if (r.promptTokens) writes.push(c.hIncrBy(key, f('prompt_tokens'), r.promptTokens))
   if (r.completionTokens) writes.push(c.hIncrBy(key, f('completion_tokens'), r.completionTokens))
   if (r.costUsd) writes.push(c.hIncrByFloat(key, f('cost_usd'), r.costUsd))
+  if (r.billedUsd) writes.push(c.hIncrByFloat(key, f('billed_usd'), r.billedUsd))
   writes.push(c.expire(key, TTL_SECONDS, 'NX'))
   void Promise.all(writes).catch((e: Error) => {
     recordMeterDrop()
@@ -62,6 +63,8 @@ export interface UsageBreakdown {
   promptTokens: number
   completionTokens: number
   costUsd: number
+  /** Montant facturé (coût x marge) — la base du ledger de la console. */
+  billedUsd: number
 }
 
 export interface UsageReport {
@@ -75,7 +78,7 @@ export interface UsageReport {
   byDay: Record<string, UsageBreakdown>
 }
 
-const zero = (): UsageBreakdown => ({ requests: 0, errors: 0, promptTokens: 0, completionTokens: 0, costUsd: 0 })
+const zero = (): UsageBreakdown => ({ requests: 0, errors: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, billedUsd: 0 })
 
 const FIELD_TO_PROP: Record<string, keyof UsageBreakdown> = {
   requests: 'requests',
@@ -83,6 +86,7 @@ const FIELD_TO_PROP: Record<string, keyof UsageBreakdown> = {
   prompt_tokens: 'promptTokens',
   completion_tokens: 'completionTokens',
   cost_usd: 'costUsd',
+  billed_usd: 'billedUsd',
 }
 
 /** Lecture agrégée sur les `days` derniers jours (inclus aujourd'hui, UTC). Les clés

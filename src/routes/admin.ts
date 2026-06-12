@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono'
 import { readUsage } from '../meter.js'
-import { createKey, revokeKey, listKeys, setCap } from '../keys.js'
+import { createKey, revokeKey, listKeys, setCap, setMargin, listMargins } from '../keys.js'
 import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../catalog-overrides.js'
 import { catalogFileSlots } from '../catalog-file.js'
 import { candidatesFor } from '../catalog.js'
@@ -90,6 +90,23 @@ admin.delete('/admin/catalog/:slot', async (c) => {
   if (!ok) return c.json({ error: { message: 'No override on this slot (or store disabled)', type: 'not_found' } }, 404)
   log.info('admin_catalog_cleared', { slot: c.req.param('slot') })
   return c.json({ cleared: c.req.param('slot') })
+})
+
+// ── Marge sur les tokens (modèle de revenus) ────────────────────────────────────
+// GET /admin/margins -> defaut global + surcharges ; PUT { pct } (null = retour au
+// defaut). Le client paie cout x (1 + pct/100), visible dans usage.cost.
+
+admin.get('/admin/margins', (c) => c.json(listMargins()))
+
+admin.put('/admin/margins/:project', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { pct?: number | null } | null
+  if (body === null || body.pct === undefined) {
+    return c.json({ error: { message: '`pct` is required (number, or null to reset to default)', type: 'invalid_request_error' } }, 400)
+  }
+  const ok = await setMargin(c.req.param('project'), body.pct)
+  if (!ok) return c.json({ error: { message: 'Invalid project/pct (0..500), or store disabled', type: 'invalid_request_error' } }, 400)
+  log.info('admin_margin_set', { project: c.req.param('project'), pct: body.pct })
+  return c.json({ project: c.req.param('project'), pct: body.pct })
 })
 
 // PUT /admin/caps/:project { usdPerDay } -> plafond journalier du projet (0 = retire).

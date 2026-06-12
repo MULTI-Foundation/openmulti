@@ -13,8 +13,8 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight } from '../keys.js'
-import { SseUsageScanner } from '../sse.js'
+import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
+import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
@@ -59,14 +59,21 @@ chat.post('/v1/chat/completions', async (c) => {
   let provider = paths[0]!
   const isStream = req.stream === true
 
+  // Marge du projet (modèle de revenus) : le client paie coût x marginFactor, via
+  // usage.cost (réponse + chunk final du stream) et le metering facturable. Facteur 1
+  // (marge 0) = passthrough byte-identique, donc le contrat MyMULTI tient par
+  // construction. Le bandit, lui, reste sur le coût BRUT (costUsd).
+  const marginFactor = 1 + marginFor(key) / 100
+
   // Une observation = deux écritures : Prometheus (monitoring, in-memory) et le
   // metering durable (facturation, Redis, fire-and-forget — cf meter.ts). `provider`
   // est mutable : l'helper capture toujours le chemin courant/final.
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
+    if (rec.costUsd) rec.billedUsd = rec.costUsd * marginFactor
     recordRequest(rec)
     meterUsage(rec)
-    if (rec.costUsd) noteLocalSpend(key, rec.costUsd) // le plafond mord entre deux refreshs
+    if (rec.billedUsd) noteLocalSpend(key, rec.billedUsd) // le plafond mord en dollars FACTURÉS
   }
 
   log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })
@@ -161,9 +168,21 @@ chat.post('/v1/chat/completions', async (c) => {
   // direct peut adapter le flux (injection du usage.cost synthétisé — le contrat
   // « le caller parse son usage dans le dernier chunk » vaut aussi en stream).
   if (isStream && upstream.body) {
-    const upstreamBody = provider.adaptStream
+    let upstreamBody = provider.adaptStream
       ? provider.adaptStream(upstream.body, decision.model)
       : upstream.body
+    // Marge : le chunk usage final est réécrit (cost x facteur) APRÈS l'adaptation
+    // provider (qui a pu injecter le coût brut). Facteur 1 : aucun transform, le flux
+    // reste un passthrough byte-à-byte.
+    if (marginFactor > 1) {
+      upstreamBody = sseLineTransform(upstreamBody, (line) =>
+        mutateSseUsageLine(line, (usage) => {
+          if (typeof usage.cost !== 'number') return false
+          usage.cost = usage.cost * marginFactor
+          return true
+        }),
+      )
+    }
     const reader = upstreamBody.getReader()
     const decoder = new TextDecoder()
     const scanner = new SseUsageScanner()
@@ -194,7 +213,9 @@ chat.post('/v1/chat/completions', async (c) => {
           record({
             error: stalled,
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
-            costUsd: scanner.usage?.cost, durationMs: Date.now() - startedAt,
+            // le scanner lit le flux APRÈS la marge : on retrouve le coût brut
+            costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
+            durationMs: Date.now() - startedAt,
           })
           return
         }
@@ -225,8 +246,13 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // ── Non-stream: parse, normalize (identity on the OpenRouter path), attach the
   // route decision, return ─────────────────────────────────────────────────────
-  const data = provider.normalizeResponse((await upstream.json()) as Record<string, unknown>, decision.model)
-  const u = data.usage as { prompt_tokens: number; completion_tokens: number; cost?: number } | undefined
+  let data = provider.normalizeResponse((await upstream.json()) as Record<string, unknown>, decision.model)
+  const rawU = data.usage as { prompt_tokens: number; completion_tokens: number; cost?: number } | undefined
+  // Marge : le client voit SON prix dans usage.cost (facteur 1 = objet intact).
+  if (marginFactor > 1 && rawU && typeof rawU.cost === 'number') {
+    data = { ...data, usage: { ...rawU, cost: rawU.cost * marginFactor } }
+  }
+  const u = rawU
   log.info('completed', {
     key, model: decision.model, provider: provider.name, stream: false,
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,

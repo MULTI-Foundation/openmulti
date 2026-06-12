@@ -160,7 +160,13 @@ must be treated as such (coordinate, don't just make the test pass).
   (strict ops token; the secret is returned only at creation, listings are redacted). **Spend
   caps are per PROJECT** (the billing unit): `PUT /admin/caps/:project`, enforced in
   `routes/chat.ts` from memory only (zero I/O on the hot path; local costs accumulate between
-  refreshes) → 429 `spend_cap_exceeded` + Retry-After to UTC midnight. Store down = fail-open —
+  refreshes) → 429 `spend_cap_exceeded` + Retry-After to UTC midnight. **Revenue margin**: the
+  client pays upstream cost × (1 + t/100) — default `OPENMULTI_MARGIN_PCT` (0 in code = iso),
+  per-project override `PUT /admin/margins/:project` (0 for MyMULTI: it has its own plan
+  billing). The margin rewrites `usage.cost` (response + final stream chunk via
+  `sseLineTransform`), feeds `billedUsd` (metering + `openmulti_billed_usd_total`) and the caps —
+  while the bandit and `openmulti_cost_usd_total` stay on RAW cost. Factor 1 = byte-identical
+  passthrough, so the contract holds by construction. Store down = fail-open —
   a Redis outage never cuts traffic. OpenMulti still knows nothing about the caller's tenants.
 - **Deploy**: push to `main` → CI (`.github/workflows/ci.yml`) runs typecheck + contract test, builds
   & pushes a multi-stage image to GHCR, then `kubectl set image` rolls it out to the **`openmulti-staging`**

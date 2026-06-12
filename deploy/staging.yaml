@@ -77,6 +77,11 @@ spec:
             # En prod, demarrer sans (iso) et l'activer apres observation.
             - name: OPENMULTI_DEFAULT_ROUTE
               value: "smart"
+            # Modele de revenus : marge par defaut sur les tokens (decision 2026-06-12).
+            # MyMULTI (projet 'om') est exempte via PUT /admin/margins/om {pct:0} —
+            # il a sa propre logique de plans, on ne marge pas deux fois.
+            - name: OPENMULTI_MARGIN_PCT
+              value: "20"
             # Catalogue local (la correspondance tier->modeles, configuration
             # d'exploitation NON versionnee). La ConfigMap est creee HORS manifeste :
             #   kubectl -n openmulti-staging create configmap openmulti-catalog \

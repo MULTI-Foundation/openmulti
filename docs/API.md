@@ -26,8 +26,10 @@ Corps : requête OpenAI standard (`messages`, `stream`, `max_tokens`, `tools`, �
 | `modalities` | `["image","text"]` | génération d'image (routée vers le modèle image) |
 
 Réponse : OpenAI standard.
-- `usage.cost` (USD) est **toujours** présent en fin de réponse/stream — fourni par
-  l'upstream ou synthétisé par OpenMulti sur les chemins directs.
+- `usage.cost` (USD) est **toujours** présent en fin de réponse/stream — c'est le
+  **prix facturé au projet** (coût upstream × marge du projet), la même valeur que
+  décompte le metering. Sur les chemins directs il est synthétisé depuis la table de
+  prix avant marge.
 - Si la requête contenait un bloc `openmulti`, la réponse non-stream porte
   `openmulti.reason` (trace de routage lisible). Sinon la réponse est strictement
   identique à celle de l'upstream.
@@ -86,6 +88,11 @@ Précédence par slot : override admin > env (`OPENMULTI_MODELS_*`) > défauts v
 ## Administration des clés et plafonds (ops)
 
 Token ops strictement requis (comme `/admin/usage`).
+
+- `GET /admin/margins` → marge par défaut (`OPENMULTI_MARGIN_PCT`) + surcharges par projet.
+- `PUT /admin/margins/:project {pct}` → marge du projet en % (`null` = retour au
+  défaut, `0` = exemption — ex. un appelant interne qui a sa propre facturation).
+  S'applique à `usage.cost`, au metering facturable (`billedUsd`) et aux plafonds.
 
 - `POST /admin/keys {project, capUsdPerDay?}` → `{key, id, project}` — le secret n'est
   retourné **qu'à la création**. Le projet doit matcher `^[a-z0-9-]{1,32}$`.
