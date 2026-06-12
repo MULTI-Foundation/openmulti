@@ -135,6 +135,61 @@ spec:
           podSelector: { matchLabels: { app: multi-app } }
       ports: [{ port: 8080, protocol: TCP }]
 ---
+# Exposition publique (api-staging.openmulti.ai) : Traefik (kube-system) doit pouvoir
+# joindre openmulti — le namespace est default-deny. Activee apres le gate OM-06/07
+# (audit 9/10, 2026-06-11). L'auth Bearer reste obligatoire sur /v1/* et /admin/*.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-from-traefik, namespace: openmulti-staging }
+spec:
+  podSelector: { matchLabels: { app: openmulti } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 8080, protocol: TCP }]
+---
+# Le namespace etant default-deny, les pods solver ACME que cert-manager cree ici
+# pour le challenge HTTP-01 doivent aussi etre joignables par Traefik (sinon : 502
+# sur le challenge et certificat jamais emis — appris en posant le premier cert).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-acme-solver, namespace: openmulti-staging }
+spec:
+  podSelector: { matchLabels: { acme.cert-manager.io/http01-solver: "true" } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: traefik } }
+      ports: [{ port: 8089, protocol: TCP }]
+---
+# HTTPS public : cert Let's Encrypt auto (cert-manager, ClusterIssuer letsencrypt-prod,
+# meme pattern que staging.mymulti.ai). Entrypoint websecure uniquement (pas de HTTP).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openmulti-api
+  namespace: openmulti-staging
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: api-staging.openmulti.ai
+      http:
+        paths:
+          - backend:
+              service: { name: openmulti, port: { number: 8080 } }
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts: [api-staging.openmulti.ai]
+      secretName: api-staging-openmulti-ai-tls
+---
 # Egress: DNS + HTTPS (OpenRouter, providers directs) + Valkey (metering durable).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
