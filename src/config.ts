@@ -44,6 +44,11 @@ export const config = {
   // Metering durable (Redis/Valkey, cf docs/PRODUCT-V1.md). Vide = désactivé : aucun
   // changement de comportement (dev local, tests).
   redisUrl: process.env.REDIS_URL || '',
+  // Marge par défaut sur les tokens, en % (modèle de revenus : le client paie
+  // coût × (1 + t/100), via usage.cost et le metering facturable). 0 = passthrough
+  // byte-identique (iso, le défaut code) ; surcharge PAR PROJET via
+  // PUT /admin/margins/:project (ex. 0 pour MyMULTI, qui a sa propre logique de plans).
+  marginPct: Math.max(0, Number(process.env.OPENMULTI_MARGIN_PCT ?? 0)),
 }
 
 // Fail closed: an empty allowlist leaves every /v1 route open (see auth.ts). That's

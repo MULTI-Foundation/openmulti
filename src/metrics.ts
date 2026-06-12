@@ -16,6 +16,7 @@ interface Stat {
   promptTokens: number
   completionTokens: number
   costUsd: number
+  billedUsd: number
   durationMsSum: number
   durationCount: number
 }
@@ -32,7 +33,7 @@ function bucket(key: string, model: string, provider: string): Stat {
   const id = `${key}${SEP}${model}${SEP}${provider}`
   let s = stats.get(id)
   if (!s) {
-    s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, durationMsSum: 0, durationCount: 0 }
+    s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, billedUsd: 0, durationMsSum: 0, durationCount: 0 }
     stats.set(id, s)
   }
   return s
@@ -59,6 +60,8 @@ export interface RequestRecord {
   promptTokens?: number
   completionTokens?: number
   costUsd?: number
+  /** Montant facturé au projet : costUsd x (1 + marge/100). Egal a costUsd sans marge. */
+  billedUsd?: number
   durationMs?: number
   error?: boolean
 }
@@ -155,6 +158,7 @@ export function recordRequest(r: RequestRecord): void {
   if (r.promptTokens) s.promptTokens += r.promptTokens
   if (r.completionTokens) s.completionTokens += r.completionTokens
   if (r.costUsd) s.costUsd += r.costUsd
+  if (r.billedUsd) s.billedUsd += r.billedUsd
   if (typeof r.durationMs === 'number') {
     s.durationMsSum += r.durationMs
     s.durationCount += 1
@@ -222,6 +226,14 @@ export function renderProm(): string {
   for (const [id, s] of stats) {
     const [key, model, provider] = id.split(SEP) as [string, string, string]
     line('openmulti_cost_usd_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.costUsd)
+  }
+
+  // Marge brute observable : billed - cost (par projet x modele x chemin).
+  out.push('# HELP openmulti_billed_usd_total Amount billed to the project in USD (upstream cost x margin).')
+  out.push('# TYPE openmulti_billed_usd_total counter')
+  for (const [id, s] of stats) {
+    const [key, model, provider] = id.split(SEP) as [string, string, string]
+    line('openmulti_billed_usd_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}"`, s.billedUsd)
   }
 
   // Duration as sum+count so a scraper can compute the average (avg = sum / count).

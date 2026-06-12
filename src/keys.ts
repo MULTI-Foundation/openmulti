@@ -18,11 +18,13 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { storeClient, storeHealthy } from './store.js'
+import { config } from './config.js'
 import { meterDay } from './meter.js'
 import { log } from './log.js'
 
 const REGISTRY = 'keys:registry'
 const CAPS = 'caps:usd_per_day'
+const MARGINS = 'margins:pct'
 const REFRESH_MS = Math.max(1000, Number(process.env.OPENMULTI_KEYS_REFRESH_MS ?? 10_000))
 
 export interface KeyRecord {
@@ -35,8 +37,9 @@ export interface KeyRecord {
 // ── Caches mémoire (le chemin chaud ne touche jamais Redis) ────────────────────
 let registryKeys: string[] = [] // les clés actives (secrets), pour l'auth
 let registryRecords: (KeyRecord & { key: string })[] = []
-let caps = new Map<string, number>() // projet -> USD/jour
-let spendToday = new Map<string, number>() // projet -> USD observés (refresh + local)
+let caps = new Map<string, number>() // projet -> USD/jour (en dollars FACTURÉS)
+let margins = new Map<string, number>() // projet -> marge % (surcharge du défaut config)
+let spendToday = new Map<string, number>() // projet -> USD facturés observés (refresh + local)
 let spendDay = '' // jour UTC du cache de dépense (reset au changement de jour)
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -51,7 +54,10 @@ export async function refreshKeys(): Promise<void> {
   const c = storeClient()
   if (!c || !storeHealthy()) return // fail-open : on garde le dernier état connu
   try {
-    const [reg, capHash] = await Promise.all([c.hGetAll(REGISTRY), c.hGetAll(CAPS)])
+    const [reg, capHash, marginHash] = await Promise.all([c.hGetAll(REGISTRY), c.hGetAll(CAPS), c.hGetAll(MARGINS)])
+    margins = new Map(
+      Object.entries(marginHash).map(([p, v]) => [p, Number(v)]).filter(([, v]) => Number.isFinite(v) && (v as number) >= 0) as [string, number][],
+    )
     const records: (KeyRecord & { key: string })[] = []
     for (const [key, raw] of Object.entries(reg)) {
       try {
@@ -64,17 +70,25 @@ export async function refreshKeys(): Promise<void> {
     registryKeys = records.filter((r) => !r.disabled).map((r) => r.key)
     caps = new Map(Object.entries(capHash).map(([p, v]) => [p, Number(v)]).filter(([, v]) => Number.isFinite(v) && (v as number) > 0) as [string, number][])
 
-    // Dépense du jour, uniquement pour les projets plafonnés (un HGETALL par projet,
-    // hash minuscule). Reset si le jour UTC a tourné.
+    // Dépense FACTURÉE du jour, uniquement pour les projets plafonnés (un HGETALL par
+    // projet, hash minuscule). billed_usd (coût × marge) ; repli sur cost_usd pour les
+    // séries écrites avant l'arrivée de la marge. Reset si le jour UTC a tourné.
     const day = meterDay()
     const spend = new Map<string, number>()
     for (const project of caps.keys()) {
       const hash = await c.hGetAll(`meter:${project}:${day}`)
-      let usd = 0
+      let billed = 0
+      let rawCost = 0
+      let hasBilled = false
       for (const [field, raw] of Object.entries(hash)) {
-        if (field.endsWith('|cost_usd')) usd += Number(raw) || 0
+        if (field.endsWith('|billed_usd')) {
+          billed += Number(raw) || 0
+          hasBilled = true
+        } else if (field.endsWith('|cost_usd')) {
+          rawCost += Number(raw) || 0
+        }
       }
-      spend.set(project, usd)
+      spend.set(project, hasBilled ? billed : rawCost)
     }
     spendToday = spend
     spendDay = day
@@ -158,6 +172,32 @@ export async function revokeKey(id: string): Promise<boolean> {
   return true
 }
 
+// ── Marge sur les tokens (modèle de revenus) ───────────────────────────────────
+
+/** Marge applicable au projet, en % : surcharge par projet sinon défaut global
+ * (OPENMULTI_MARGIN_PCT). Le client paie coût × (1 + pct/100). */
+export function marginFor(project: string): number {
+  return margins.get(project) ?? config.marginPct
+}
+
+export async function setMargin(project: string, pct: number | null): Promise<boolean> {
+  if (!PROJECT_RE.test(project)) return false
+  const c = storeClient()
+  if (!c) return false
+  if (pct === null) {
+    await c.hDel(MARGINS, project) // retour au défaut global
+  } else {
+    if (!Number.isFinite(pct) || pct < 0 || pct > 500) return false
+    await c.hSet(MARGINS, project, String(pct))
+  }
+  await refreshKeys()
+  return true
+}
+
+export function listMargins(): { defaultPct: number; overrides: Record<string, number> } {
+  return { defaultPct: config.marginPct, overrides: Object.fromEntries(margins) }
+}
+
 export async function setCap(project: string, usdPerDay: number): Promise<boolean> {
   if (!PROJECT_RE.test(project) || !Number.isFinite(usdPerDay) || usdPerDay < 0) return false
   const c = storeClient()
@@ -181,6 +221,7 @@ export function _resetKeysForTests(): void {
   registryKeys = []
   registryRecords = []
   caps = new Map()
+  margins = new Map()
   spendToday = new Map()
   spendDay = ''
   if (timer) clearInterval(timer)
