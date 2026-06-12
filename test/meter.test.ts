@@ -141,5 +141,9 @@ test('admin/usage: token ops strict requis, rapport servi avec', async () => {
   assert.equal(report.key, 'proj')
   assert.ok(Math.abs(report.totals.costUsd - 0.1) < 1e-12)
 
-  assert.equal((await get('ops-token-test', 'days=7')).status, 400, 'key obligatoire')
+  // sans `key` : vue multi-projets (le batch de sync console)
+  const all = await get('ops-token-test', 'days=7')
+  assert.equal(all.status, 200)
+  const report2 = await all.json()
+  assert.ok(report2.projects.proj, 'le projet doit apparaitre dans la vue globale')
 })

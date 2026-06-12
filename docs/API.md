@@ -36,8 +36,9 @@ Réponse : OpenAI standard.
 - En stream, la décision de routage est exposée dans les en-têtes `X-OpenMulti-Model`
   et `X-OpenMulti-Reason`.
 
-Erreurs : `400` (corps invalide), `401`, `413` (corps > limite), `429` (rate limit ou
-plafond de dépense, avec `Retry-After`), `504` (upstream injoignable après retries).
+Erreurs : `400` (corps invalide), `401`, `402` (`insufficient_credits` — solde prépayé
+épuisé), `413` (corps > limite), `429` (rate limit ou plafond de dépense, avec
+`Retry-After`), `504` (upstream injoignable après retries).
 Les erreurs upstream conservent leur **statut** d'origine mais leur corps est
 **normalisé** (`error.type` ∈ `rate_limit_error` | `upstream_rejected` |
 `upstream_error`, `error.code` = statut upstream) — le détail brut n'est jamais relayé.
@@ -94,8 +95,8 @@ Token ops strictement requis (comme `/admin/usage`).
   défaut, `0` = exemption — ex. un appelant interne qui a sa propre facturation).
   S'applique à `usage.cost`, au metering facturable (`billedUsd`) et aux plafonds.
 
-- `POST /admin/keys {project, capUsdPerDay?}` → `{key, id, project}` — le secret n'est
-  retourné **qu'à la création**. Le projet doit matcher `^[a-z0-9-]{1,32}$`.
+- `POST /admin/keys {project, capUsdPerDay?, name?}` → `{key, id, project}` — le secret
+  n'est retourné **qu'à la création**. Projet : `^[a-z0-9-]{1,32}$`, nom ≤ 64 c.
 - `GET /admin/keys` → liste **rédigée** (id, projet, date, état, plafond — jamais le secret).
 - `DELETE /admin/keys/:id` → révocation (effet immédiat sur le pod local, ≤ 10 s ailleurs).
 - `PUT /admin/caps/:project {usdPerDay}` → plafond de dépense **journalier (UTC), par
@@ -104,10 +105,20 @@ Token ops strictement requis (comme `/admin/usage`).
   `spend_cap_exceeded` avec `Retry-After` jusqu'à minuit UTC. Sans plafond : aucun
   changement. Panne du store : fail-open (le trafic n'est jamais coupé par une panne Redis).
 
+## Solde prépayé (ops)
+
+- `POST /admin/credits/:project {usd, ref}` → top-up **idempotent** (`ref` = id
+  d'événement Stripe : une re-livraison de webhook ne double-crédite jamais).
+- `GET /admin/balance` → `{projet: {creditsUsd, spentUsd, balanceUsd}}` — le solde =
+  crédits − cumul **facturé** (marge incluse), décompté en continu par le gateway.
+- Solde épuisé → les requêtes du projet reçoivent **`402 insufficient_credits`**.
+  Un projet **sans crédits posés** n'est jamais bloqué (appelants internes, dev).
+
 ## GET /admin/usage (ops)
 
 `?key=<projet>&days=<n>` — l'usage **durable** d'un projet (requêtes, erreurs, tokens,
-coût USD) agrégé sur la fenêtre : totaux, par modèle×chemin, par jour UTC. C'est la
-source pour facturer (survit aux restarts, contrairement à /metrics). Token ops
-strictement requis (`OPENMULTI_METRICS_TOKEN`) — une clé appelante est refusée.
-`503` si le metering n'est pas configuré (`REDIS_URL`).
+coût brut et **facturé**) agrégé sur la fenêtre : totaux, par modèle×chemin, par jour
+UTC. C'est la source pour facturer (survit aux restarts, contrairement à /metrics).
+**Sans `key`** : tous les projets connus (days ≤ 31) — le batch de sync d'une console.
+Token ops strictement requis (`OPENMULTI_METRICS_TOKEN`) — une clé appelante est
+refusée. `503` si le metering n'est pas configuré (`REDIS_URL`).
