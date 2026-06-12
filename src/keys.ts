@@ -25,12 +25,16 @@ import { log } from './log.js'
 const REGISTRY = 'keys:registry'
 const CAPS = 'caps:usd_per_day'
 const MARGINS = 'margins:pct'
+const CREDITS = 'credits:usd' // total achete (cumulatif), pousse par la console
+const CREDIT_REFS = 'credits:refs' // idempotence des top-ups (field: projet|ref)
+const SPENT = 'spent:usd' // cumul facture, incremente par meter.ts
 const REFRESH_MS = Math.max(1000, Number(process.env.OPENMULTI_KEYS_REFRESH_MS ?? 10_000))
 
 export interface KeyRecord {
   id: string
   project: string
   createdAt: string
+  name?: string
   disabled?: boolean
 }
 
@@ -39,6 +43,9 @@ let registryKeys: string[] = [] // les clés actives (secrets), pour l'auth
 let registryRecords: (KeyRecord & { key: string })[] = []
 let caps = new Map<string, number>() // projet -> USD/jour (en dollars FACTURÉS)
 let margins = new Map<string, number>() // projet -> marge % (surcharge du défaut config)
+let credits = new Map<string, number>() // projet -> total crédité (prépayé)
+let spentTotal = new Map<string, number>() // projet -> cumul facturé (depuis le store)
+let localBilled = new Map<string, number>() // facturé localement depuis le dernier refresh
 let spendToday = new Map<string, number>() // projet -> USD facturés observés (refresh + local)
 let spendDay = '' // jour UTC du cache de dépense (reset au changement de jour)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -54,7 +61,12 @@ export async function refreshKeys(): Promise<void> {
   const c = storeClient()
   if (!c || !storeHealthy()) return // fail-open : on garde le dernier état connu
   try {
-    const [reg, capHash, marginHash] = await Promise.all([c.hGetAll(REGISTRY), c.hGetAll(CAPS), c.hGetAll(MARGINS)])
+    const [reg, capHash, marginHash, creditHash, spentHash] = await Promise.all([
+      c.hGetAll(REGISTRY), c.hGetAll(CAPS), c.hGetAll(MARGINS), c.hGetAll(CREDITS), c.hGetAll(SPENT),
+    ])
+    credits = new Map(Object.entries(creditHash).map(([p, v]) => [p, Number(v) || 0]))
+    spentTotal = new Map(Object.entries(spentHash).map(([p, v]) => [p, Number(v) || 0]))
+    localBilled = new Map() // le store vient d'etre relu : l'accumulateur local repart
     margins = new Map(
       Object.entries(marginHash).map(([p, v]) => [p, Number(v)]).filter(([, v]) => Number.isFinite(v) && (v as number) >= 0) as [string, number][],
     )
@@ -108,14 +120,17 @@ export function initKeys(): void {
 
 /** Coût observé localement (appelé par routes/chat.ts à chaque réponse) : comble le
  * trou entre deux refreshs pour que le plafond morde sans attendre le prochain sync. */
-export function noteLocalSpend(project: string, costUsd: number): void {
-  if (!costUsd || !caps.has(project)) return
+export function noteLocalSpend(project: string, billedUsd: number): void {
+  if (!billedUsd) return
+  // solde prepaye : on decompte localement entre deux refreshs
+  if (credits.has(project)) localBilled.set(project, (localBilled.get(project) ?? 0) + billedUsd)
+  if (!caps.has(project)) return
   const day = meterDay()
   if (day !== spendDay) {
     spendToday = new Map()
     spendDay = day
   }
-  spendToday.set(project, (spendToday.get(project) ?? 0) + costUsd)
+  spendToday.set(project, (spendToday.get(project) ?? 0) + billedUsd)
 }
 
 export interface CapVerdict {
@@ -134,6 +149,48 @@ export function checkSpendCap(project: string): CapVerdict {
   return { blocked: spent >= cap, capUsd: cap, spentUsd: spent }
 }
 
+// ── Solde prépayé (la console pousse les top-ups, le gateway décompte) ─────────
+
+export interface BalanceVerdict {
+  blocked: boolean
+  balanceUsd?: number
+}
+
+/** Solde du projet = crédits − cumul facturé (store) − facturé local depuis le
+ * dernier refresh. Projets SANS crédits posés : pas de notion de solde → fail-open
+ * (MyMULTI, dev). Purement mémoire — zéro I/O sur le chemin de la requête. */
+export function checkBalance(project: string): BalanceVerdict {
+  const total = credits.get(project)
+  if (total === undefined) return { blocked: false }
+  const balance = total - (spentTotal.get(project) ?? 0) - (localBilled.get(project) ?? 0)
+  return { blocked: balance <= 0, balanceUsd: balance }
+}
+
+/** Top-up idempotent (ref = id d'événement Stripe côté console). Retourne le nouveau
+ * total crédité, ou null si store coupé / entrée invalide ; 'duplicate' si la ref a
+ * déjà été appliquée (la console peut re-livrer un webhook sans double-créditer). */
+export async function addCredits(project: string, usd: number, ref: string): Promise<number | null | 'duplicate'> {
+  if (!PROJECT_RE.test(project) || !Number.isFinite(usd) || usd <= 0 || !ref || ref.length > 128) return null
+  const c = storeClient()
+  if (!c) return null
+  const refField = `${project}|${ref}`
+  const seen = await c.hGetAll(CREDIT_REFS)
+  if (refField in seen) return 'duplicate'
+  await c.hSet(CREDIT_REFS, refField, String(usd))
+  await c.hIncrByFloat(CREDITS, project, usd)
+  await refreshKeys()
+  return credits.get(project) ?? usd
+}
+
+export function balanceReport(): Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> {
+  const out: Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> = {}
+  for (const [project, total] of credits) {
+    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0)
+    out[project] = { creditsUsd: total, spentUsd: spent, balanceUsd: total - spent }
+  }
+  return out
+}
+
 /** Secondes jusqu'à minuit UTC — le Retry-After d'un plafond journalier atteint. */
 export function secondsToUtcMidnight(now = new Date()): number {
   const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
@@ -150,12 +207,13 @@ export interface CreatedKey {
   project: string
 }
 
-export async function createKey(project: string, capUsdPerDay?: number): Promise<CreatedKey | { error: string }> {
+export async function createKey(project: string, capUsdPerDay?: number, name?: string): Promise<CreatedKey | { error: string }> {
   if (!PROJECT_RE.test(project)) return { error: 'invalid project (expected /^[a-z0-9-]{1,32}$/)' }
+  if (name !== undefined && (typeof name !== 'string' || name.length > 64)) return { error: 'invalid name (max 64 chars)' }
   const c = storeClient()
   if (!c) return { error: 'key registry disabled (set REDIS_URL)' }
   const key = `sk_${project}_${randomBytes(24).toString('hex')}`
-  const record: KeyRecord = { id: keyId(key), project, createdAt: new Date().toISOString() }
+  const record: KeyRecord = { id: keyId(key), project, createdAt: new Date().toISOString(), ...(name ? { name } : {}) }
   await c.hSet(REGISTRY, key, JSON.stringify(record))
   if (capUsdPerDay && capUsdPerDay > 0) await c.hSet(CAPS, project, String(capUsdPerDay))
   await refreshKeys() // visible immédiatement sur CE pod ; les autres ≤ REFRESH_MS
@@ -222,6 +280,9 @@ export function _resetKeysForTests(): void {
   registryRecords = []
   caps = new Map()
   margins = new Map()
+  credits = new Map()
+  spentTotal = new Map()
+  localBilled = new Map()
   spendToday = new Map()
   spendDay = ''
   if (timer) clearInterval(timer)

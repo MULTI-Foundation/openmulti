@@ -3,8 +3,8 @@
 // dans le store partagé — sans REDIS_URL ces routes répondent 503, l'app fonctionne.
 
 import { Hono } from 'hono'
-import { readUsage } from '../meter.js'
-import { createKey, revokeKey, listKeys, setCap, setMargin, listMargins } from '../keys.js'
+import { readUsage, readAllUsage } from '../meter.js'
+import { createKey, revokeKey, listKeys, setCap, setMargin, listMargins, addCredits, balanceReport } from '../keys.js'
 import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../catalog-overrides.js'
 import { catalogFileSlots } from '../catalog-file.js'
 import { candidatesFor } from '../catalog.js'
@@ -14,10 +14,16 @@ import type { AppEnv, Tier } from '../types.js'
 export const admin = new Hono<AppEnv>()
 
 // GET /admin/usage?key=<projet>&days=<n>  (days: 1..366, défaut 30)
+// Sans `key` : TOUS les projets connus (days plafonné à 31 — le batch de sync console).
 admin.get('/admin/usage', async (c) => {
   const key = c.req.query('key')
   if (!key) {
-    return c.json({ error: { message: '`key` query param is required (project label)', type: 'invalid_request_error' } }, 400)
+    const days = Math.min(31, Math.max(1, Number(c.req.query('days') ?? 7) || 7))
+    const all = await readAllUsage(days)
+    if (!all) {
+      return c.json({ error: { message: 'Durable metering disabled (set REDIS_URL)', type: 'metering_disabled' } }, 503)
+    }
+    return c.json({ days, projects: all })
   }
   const days = Math.min(366, Math.max(1, Number(c.req.query('days') ?? 30) || 30))
   const report = await readUsage(key, days)
@@ -27,14 +33,37 @@ admin.get('/admin/usage', async (c) => {
   return c.json(report)
 })
 
-// POST /admin/keys { project, capUsdPerDay? } -> { key, id, project }
+// ── Solde prépayé (le ledger console pousse les top-ups, le gateway décompte) ───
+// POST /admin/credits/:project { usd, ref } -> top-up idempotent (ref = event Stripe).
+// GET  /admin/balance -> { projet: { creditsUsd, spentUsd, balanceUsd } }.
+// Un projet SANS crédits posés n'est jamais bloqué (MyMULTI, dev).
+
+admin.post('/admin/credits/:project', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { usd?: number; ref?: string } | null
+  if (!body?.usd || !body.ref) {
+    return c.json({ error: { message: '`usd` (>0) and `ref` (idempotency key) are required', type: 'invalid_request_error' } }, 400)
+  }
+  const out = await addCredits(c.req.param('project'), body.usd, body.ref)
+  if (out === null) {
+    return c.json({ error: { message: 'Invalid project/usd/ref, or store disabled', type: 'invalid_request_error' } }, 400)
+  }
+  if (out === 'duplicate') {
+    return c.json({ project: c.req.param('project'), duplicate: true }, 200) // webhook re-livre : no-op
+  }
+  log.info('admin_credits_added', { project: c.req.param('project'), usd: body.usd, ref: body.ref })
+  return c.json({ project: c.req.param('project'), creditsUsd: out }, 201)
+})
+
+admin.get('/admin/balance', (c) => c.json({ balances: balanceReport() }))
+
+// POST /admin/keys { project, capUsdPerDay?, name? } -> { key, id, project }
 // Le secret n'est retourné QU'ICI, à la création — la liste est rédigée.
 admin.post('/admin/keys', async (c) => {
   const body = (await c.req.json().catch(() => null)) as { project?: string; capUsdPerDay?: number } | null
   if (!body?.project) {
     return c.json({ error: { message: '`project` is required', type: 'invalid_request_error' } }, 400)
   }
-  const out = await createKey(body.project, body.capUsdPerDay)
+  const out = await createKey(body.project, body.capUsdPerDay, (body as { name?: string }).name)
   if ('error' in out) {
     const disabled = out.error.includes('REDIS_URL')
     return c.json({ error: { message: out.error, type: disabled ? 'keys_disabled' : 'invalid_request_error' } }, disabled ? 503 : 400)

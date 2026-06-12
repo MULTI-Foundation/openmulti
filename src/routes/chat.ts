@@ -13,7 +13,7 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import type { AppEnv, ChatRequest } from '../types.js'
@@ -26,6 +26,14 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // Plafond de dépense journalier du projet (incrément C) : purement mémoire (zéro
   // I/O ici), fail-open sans plafond/donnée. 429 explicite, Retry-After = minuit UTC.
+  // Solde prépayé (console) : épuisé -> 402, le client doit re-créditer.
+  const balance = checkBalance(key)
+  if (balance.blocked) {
+    return c.json(
+      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account`, type: 'insufficient_credits' } },
+      402,
+    )
+  }
   const cap = checkSpendCap(key)
   if (cap.blocked) {
     log.warn('spend_cap_blocked', { key, capUsd: cap.capUsd, spentUsd: cap.spentUsd })

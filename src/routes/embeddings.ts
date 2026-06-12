@@ -16,7 +16,7 @@ import { isRetryableStatus, backoff, pickAllowedFields, normalizedUpstreamError,
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
 import type { AppEnv } from '../types.js'
 
 export const embeddings = new Hono<AppEnv>()
@@ -25,6 +25,14 @@ embeddings.post('/v1/embeddings', async (c) => {
   const startedAt = Date.now()
   const key = keyLabel(c.get('apiKey'))
 
+  // Solde prépayé (console) : épuisé -> 402, le client doit re-créditer.
+  const balance = checkBalance(key)
+  if (balance.blocked) {
+    return c.json(
+      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account`, type: 'insufficient_credits' } },
+      402,
+    )
+  }
   const cap = checkSpendCap(key)
   if (cap.blocked) {
     return c.json(

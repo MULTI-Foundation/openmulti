@@ -49,7 +49,14 @@ export function meterUsage(r: RequestRecord): void {
   if (r.promptTokens) writes.push(c.hIncrBy(key, f('prompt_tokens'), r.promptTokens))
   if (r.completionTokens) writes.push(c.hIncrBy(key, f('completion_tokens'), r.completionTokens))
   if (r.costUsd) writes.push(c.hIncrByFloat(key, f('cost_usd'), r.costUsd))
-  if (r.billedUsd) writes.push(c.hIncrByFloat(key, f('billed_usd'), r.billedUsd))
+  if (r.billedUsd) {
+    writes.push(c.hIncrByFloat(key, f('billed_usd'), r.billedUsd))
+    // Cumul a vie du facture par projet : la base du solde prepaye
+    // (balance = credits - spent, cf keys.ts). Pas de TTL : c'est du ledger.
+    writes.push(c.hIncrByFloat('spent:usd', r.key, r.billedUsd))
+  }
+  // Registre des projets connus (pour GET /admin/usage multi-projets). Idempotent.
+  writes.push(c.hSet('projects:known', r.key, '1'))
   writes.push(c.expire(key, TTL_SECONDS, 'NX'))
   void Promise.all(writes).catch((e: Error) => {
     recordMeterDrop()
@@ -112,4 +119,18 @@ export async function readUsage(keyLabel: string, days: number, now = new Date()
     }
   }
   return report
+}
+
+/** Usage agrégé de TOUS les projets connus sur `days` jours (le batch de sync de la
+ * console). Itère projects:known × jours — pas de SCAN, cardinalité bornée. */
+export async function readAllUsage(days: number, now = new Date()): Promise<Record<string, UsageReport> | null> {
+  const c = storeClient()
+  if (!c) return null
+  const known = Object.keys(await c.hGetAll('projects:known'))
+  const out: Record<string, UsageReport> = {}
+  for (const project of known) {
+    const report = await readUsage(project, days, now)
+    if (report) out[project] = report
+  }
+  return out
 }
