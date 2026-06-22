@@ -20,6 +20,10 @@ import { pathAggregate } from '../metrics.js'
 import { selectModel } from '../select.js'
 import { openRouterProvider } from './openrouter.js'
 import { moonshotProvider } from './moonshot.js'
+import { openaiProvider } from './openai.js'
+import { deepseekProvider } from './deepseek.js'
+import { mistralProvider } from './mistral.js'
+import { zaiProvider } from './zai.js'
 import type { Provider } from './types.js'
 
 type DirectMode = 'direct' | 'smart'
@@ -40,6 +44,10 @@ interface DirectVendor {
 // config, ses prix dans pricing.ts). Le préfixe est l'id CATALOGUE (style OpenRouter).
 const DIRECT_VENDORS: DirectVendor[] = [
   { prefix: 'moonshotai/', envVar: 'OPENMULTI_PROVIDER_MOONSHOTAI', provider: moonshotProvider, apiKey: config.moonshot.apiKey },
+  { prefix: 'openai/', envVar: 'OPENMULTI_PROVIDER_OPENAI', provider: openaiProvider, apiKey: config.openai.apiKey },
+  { prefix: 'deepseek/', envVar: 'OPENMULTI_PROVIDER_DEEPSEEK', provider: deepseekProvider, apiKey: config.deepseek.apiKey },
+  { prefix: 'mistralai/', envVar: 'OPENMULTI_PROVIDER_MISTRALAI', provider: mistralProvider, apiKey: config.mistral.apiKey },
+  { prefix: 'z-ai/', envVar: 'OPENMULTI_PROVIDER_ZAI', provider: zaiProvider, apiKey: config.zai.apiKey },
 ]
 
 interface ActiveVendor {
