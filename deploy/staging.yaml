@@ -50,6 +50,28 @@ spec:
               valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENROUTER_API_KEY } }
             - name: OPENMULTI_API_KEYS
               valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_API_KEYS } }
+            # Chemins d'acces DIRECTS (au-dela d'OpenRouter). Chaque cle est `optional:
+            # true` : tant qu'elle n'est pas dans le secret, la var reste vide et le
+            # vendor retombe sur OpenRouter (zero regression). Le mode `smart` fait
+            # arbitrer le bandit direct vs OpenRouter ; il reste inerte sans la cle.
+            # Pour activer un vendor : ajouter sa cle au secret openmulti-secrets
+            # (kubectl patch ... --type merge -p '{"stringData":{"OPENAI_API_KEY":...}}').
+            - name: OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENAI_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_OPENAI
+              value: "smart"
+            - name: DEEPSEEK_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: DEEPSEEK_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_DEEPSEEK
+              value: "smart"
+            - name: MISTRAL_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: MISTRAL_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_MISTRALAI
+              value: "smart"
+            - name: ZAI_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: ZAI_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_ZAI
+              value: "smart"
             - name: OPENMULTI_REFERER
               value: "https://staging.mymulti.ai"
             - name: OPENMULTI_TITLE
