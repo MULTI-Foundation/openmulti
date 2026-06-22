@@ -64,5 +64,5 @@
 
 > Choix d'image acté le 11 juin : **Valkey** (fork Redis, Linux Foundation, BSD) —
 > protocole et client identiques, licence sans ambiguïté. Activation staging : les
-> objets Valkey de `deploy/staging.yaml` sont à appliquer manuellement par un admin
-> (la CI ne fait que `set image`), cf l'en-tête du manifeste.
+> objets Valkey du manifeste de déploiement (repo privé `openmulti-ops`) sont à appliquer
+> manuellement par un admin (la CI ne fait que `set image`), cf l'en-tête du manifeste.

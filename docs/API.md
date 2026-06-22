@@ -70,8 +70,8 @@ OpenRouter, le coût réel arrive par réponse dans `usage.cost`).
 ## GET /metrics (ops)
 
 Prometheus, authentifié (token ops dédié ou clé appelante). Compteurs par
-projet × modèle × chemin d'accès. Réservé à l'exploitation — voir
-`docs/OBSERVABILITY-SETUP.md`.
+projet × modèle × chemin d'accès. Réservé à l'exploitation — runbook dans le
+repo privé `openmulti-ops`.
 
 ## Administration du catalogue (ops)
 

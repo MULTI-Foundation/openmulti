@@ -1,0 +1,92 @@
+# OpenMulti — exemple de déploiement Kubernetes (référence neutre).
+#
+# Manifeste générique et vendor-agnostique : à toi de l'adapter (namespace, image,
+# politiques réseau, ingress/TLS selon ton cluster). Les manifestes réels de production
+# (topologie, NetworkPolicies, monitoring) ne font pas partie du dépôt open-source.
+#
+# Secrets : JAMAIS versionnés. Crée un Secret hors manifeste et référence-le via
+# secretKeyRef (ci-dessous). Exemple :
+#   kubectl create secret generic openmulti-secrets \
+#     --from-literal=OPENROUTER_API_KEY=sk-or-...        # requis
+#     --from-literal=OPENMULTI_API_KEYS=sk_yourproject_...
+#   # clés des chemins directs (optionnelles ; absentes = tout passe par OpenRouter) :
+#   #   --from-literal=OPENAI_API_KEY=...  --from-literal=DEEPSEEK_API_KEY=...
+#   #   --from-literal=MISTRAL_API_KEY=... --from-literal=ZAI_API_KEY=...
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: openmulti, labels: { app: openmulti } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: openmulti } }
+  template:
+    metadata: { labels: { app: openmulti } }
+    spec:
+      containers:
+        - name: openmulti
+          image: ghcr.io/your-org/openmulti:latest # épingle un digest/sha en prod
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - name: PORT
+              value: "8080"
+            # Requis : la clé du provider upstream (OpenRouter).
+            - name: OPENROUTER_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENROUTER_API_KEY } }
+            # Allowlist des clés autorisées à appeler OpenMulti (une par projet consommateur).
+            - name: OPENMULTI_API_KEYS
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_API_KEYS } }
+            # ── Chemins d'accès DIRECTS (optionnels, opt-in). Sans la clé, le vendor
+            #    retombe sur OpenRouter (zéro régression). 'smart' = le bandit arbitre
+            #    direct vs OpenRouter au coût/santé observés. ────────────────────────────
+            - name: OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENAI_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_OPENAI
+              value: "smart"
+            - name: DEEPSEEK_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: DEEPSEEK_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_DEEPSEEK
+              value: "smart"
+            - name: MISTRAL_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: MISTRAL_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_MISTRALAI
+              value: "smart"
+            - name: ZAI_API_KEY
+              valueFrom: { secretKeyRef: { name: openmulti-secrets, key: ZAI_API_KEY, optional: true } }
+            - name: OPENMULTI_PROVIDER_ZAI
+              value: "smart"
+            # ── Durcissement (tout opt-in, défaut sûr). ──────────────────────────────────
+            - name: OPENMULTI_MAX_BODY_BYTES
+              value: "8388608"
+            # - name: OPENMULTI_RATE_LIMIT_PER_MIN   # 0/absent = désactivé
+            #   value: "600"
+            # - name: OPENMULTI_METRICS_TOKEN        # token ops dédié pour /metrics + /admin
+            #   valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_METRICS_TOKEN, optional: true } }
+            # ── Metering durable / état partagé (optionnel) : Redis/Valkey. Absent = no-op.
+            # - name: REDIS_URL
+            #   value: "redis://valkey:6379"
+            # ── Routing : 'default' = iso (1er candidat) ; 'smart' = bandit. ──────────────
+            # - name: OPENMULTI_DEFAULT_ROUTE
+            #   value: "smart"
+            # ── Catalogue tier->modèles (config d'exploitation, NON versionnée) : monté
+            #    depuis une ConfigMap. Absent = défauts/env. ───────────────────────────────
+            # - name: OPENMULTI_CATALOG_FILE
+            #   value: "/etc/openmulti/catalog.json"
+          readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 30 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: openmulti }
+spec:
+  type: ClusterIP
+  selector: { app: openmulti }
+  ports: [{ name: http, port: 8080, targetPort: http }]
