@@ -15,6 +15,21 @@ export interface OpenMultiExtension {
   allow?: string[]
   /** Selection strategy among tier candidates. Defaults to OPENMULTI_DEFAULT_ROUTE. */
   route?: RouteStrategy
+  /** Council / fusion (mixture-of-agents) — opt-in. Présent = la requête est délibérée
+   * par un panel puis synthétisée (cf council.ts). Coûteux (N+1 ou 2N+1 appels). */
+  council?: CouncilRequest
+}
+
+/** Configuration de la délibération council (toutes optionnelles : presets/défauts). */
+export interface CouncilRequest {
+  /** Preset d'exploitation : 'budget' | 'quality' (mappé à un panel cross-famille). */
+  preset?: string
+  /** Override explicite du panel (ids de modèle, 1-8). Prime sur le preset. */
+  panel?: string[]
+  /** Modèle juge/synthétiseur (chair). Défaut : OPENMULTI_COUNCIL_CHAIR. */
+  chair?: string
+  /** 'fuse' (panel -> chair, défaut) | 'deliberate' (panel -> revue pairs -> chair). */
+  mode?: 'fuse' | 'deliberate'
 }
 
 export interface ChatMessage {
