@@ -2,7 +2,7 @@
 
 > Statut : **proposition de design**, rien n'est implémenté. Objectif : préparer le
 > chantier « providers directs au-delà d'OpenRouter », prérequis structurel de la vision
-> long terme (concurrencer OpenRouter plutôt que le consommer — cf `BILAN-2026-06-10.md`).
+> long terme (concurrencer OpenRouter plutôt que le consommer).
 > Aucune décision ici ne modifie le contrat MyMULTI (`ARCHITECTURE.md` §5) : il reste la loi.
 
 ## 1. Pourquoi

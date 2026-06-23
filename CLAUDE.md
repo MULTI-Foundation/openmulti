@@ -170,7 +170,8 @@ must be treated as such (coordinate, don't just make the test pass).
   a Redis outage never cuts traffic. OpenMulti still knows nothing about the caller's tenants.
 - **Deploy**: push to `main` → CI (`.github/workflows/ci.yml`) runs typecheck + contract test, builds
   & pushes a multi-stage image to GHCR, then `kubectl set image` rolls it out to the **`openmulti-staging`**
-  k3s namespace (dedicated, isolated from `multi-staging`). Manifests in `deploy/staging.yaml`.
+  k3s namespace (dedicated, isolated from `multi-staging`). The real manifests live in the
+  private `openmulti-ops` repo; `deploy/example.yaml` here is a neutral, vendor-agnostic reference.
 
 ## Observability
 
@@ -181,18 +182,18 @@ are recorded in `routes/chat.ts` at completion / upstream error / stream stall. 
 labelled by **project** (`keyLabel`: `sk_<project>_<secret>` → `<project>`, never the raw
 secret) × model × provider (access path). This is the monitoring side; it is pure side-channel
 and must never alter a proxied response. Activation côté cluster (token ops, scrape Prometheus,
-requêtes PromQL) : `docs/OBSERVABILITY-SETUP.md`.
+requêtes PromQL) : runbook observabilité dans le repo privé `openmulti-ops`.
 
 **Durable metering is separate** (`src/meter.ts`, the billing substrate — `docs/PRODUCT-V1.md`):
 per key × UTC day × model × path counters in Redis/Valkey (`REDIS_URL`; empty = no-op, so dev and
 tests are unchanged). Writes are fire-and-forget — a Redis outage never breaks a call, drops are
 counted in `openmulti_meter_dropped_total`. Read via `GET /admin/usage?key=&days=` (strict ops
-token, `adminAuth` — no caller-key fallback). Valkey runs in the same namespace
-(`deploy/staging.yaml`, applied manually by an admin — the CI only does `set image`).
+token, `adminAuth` — no caller-key fallback). Valkey runs in the same namespace (real manifest in
+the private `openmulti-ops` repo, applied manually by an admin — the CI only does `set image`).
 
 ## Security gates (opt-in)
 
-Hardening from `docs/SECURITY-AUDIT-2026-06-08.md`, all default-off / regression-free:
+Hardening from the security audit (kept in the private `openmulti-ops` repo), all default-off / regression-free:
 - **Body size** (`OPENMULTI_MAX_BODY_BYTES`, default 8 MiB) — Content-Length middleware in
   `app.ts` + byte check in the handler → 413.
 - **Rate limit** (`OPENMULTI_RATE_LIMIT_PER_MIN`, 0=off) — per-project fixed 60s window
