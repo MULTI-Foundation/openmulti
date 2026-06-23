@@ -65,6 +65,20 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'z-ai/glm-4.5-air': { inputPerMTok: 0.2, outputPerMTok: 1.1 },
   'z-ai/glm-4.5-x': { inputPerMTok: 2.2, outputPerMTok: 8.9 },
   'z-ai/glm-4.5-airx': { inputPerMTok: 1.1, outputPerMTok: 4.5 },
+
+  // Qwen (Alibaba DashScope, international) — vérifié le 2026-06-23 sur
+  // alibabacloud.com/help/en/model-studio/model-pricing. Plusieurs modèles sont tarifés
+  // PAR PALIER de contexte : on prend le palier de base (borne basse pour les gros
+  // contextes). qwen-plus : output = tarif NON-thinking (le thinking, plus cher, n'est
+  // pas activé par ce câblage de base).
+  'qwen/qwen3-max': { inputPerMTok: 1.2, outputPerMTok: 6 },
+  'qwen/qwen-max': { inputPerMTok: 1.6, outputPerMTok: 6.4 },
+  'qwen/qwen-plus': { inputPerMTok: 0.4, outputPerMTok: 1.2 },
+  'qwen/qwen-flash': { inputPerMTok: 0.05, outputPerMTok: 0.4 },
+  'qwen/qwen3.5-plus': { inputPerMTok: 0.4, outputPerMTok: 2.4 },
+  'qwen/qwen3.5-flash': { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  'qwen/qwen-turbo': { inputPerMTok: 0.05, outputPerMTok: 0.2 },
+  'qwen/qwen3-235b-a22b': { inputPerMTok: 0.7, outputPerMTok: 2.8 },
 }
 
 export interface PricingParse {

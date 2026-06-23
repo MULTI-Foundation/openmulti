@@ -24,6 +24,7 @@ import { openaiProvider } from './openai.js'
 import { deepseekProvider } from './deepseek.js'
 import { mistralProvider } from './mistral.js'
 import { zaiProvider } from './zai.js'
+import { qwenProvider } from './qwen.js'
 import type { Provider } from './types.js'
 
 type DirectMode = 'direct' | 'smart'
@@ -48,6 +49,7 @@ const DIRECT_VENDORS: DirectVendor[] = [
   { prefix: 'deepseek/', envVar: 'OPENMULTI_PROVIDER_DEEPSEEK', provider: deepseekProvider, apiKey: config.deepseek.apiKey },
   { prefix: 'mistralai/', envVar: 'OPENMULTI_PROVIDER_MISTRALAI', provider: mistralProvider, apiKey: config.mistral.apiKey },
   { prefix: 'z-ai/', envVar: 'OPENMULTI_PROVIDER_ZAI', provider: zaiProvider, apiKey: config.zai.apiKey },
+  { prefix: 'qwen/', envVar: 'OPENMULTI_PROVIDER_QWEN', provider: qwenProvider, apiKey: config.qwen.apiKey },
 ]
 
 interface ActiveVendor {

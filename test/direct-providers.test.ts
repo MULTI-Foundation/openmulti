@@ -19,6 +19,8 @@ process.env.OPENMULTI_PROVIDER_MISTRALAI = 'direct'
 process.env.MISTRAL_API_KEY = 'mk-test'
 process.env.OPENMULTI_PROVIDER_ZAI = 'smart'
 process.env.ZAI_API_KEY = 'zk-test'
+process.env.OPENMULTI_PROVIDER_QWEN = 'direct'
+process.env.QWEN_API_KEY = 'qk-test'
 // Flag posé MAIS clé absente -> doit retomber sur openrouter (fallback silencieux).
 process.env.OPENMULTI_PROVIDER_OPENAI = 'direct'
 delete process.env.OPENAI_API_KEY
@@ -79,6 +81,7 @@ const CASES: Case[] = [
   { vendor: 'deepseek', model: 'deepseek/deepseek-chat', nakedId: 'deepseek-chat', baseHost: 'https://api.deepseek.com/', bearer: 'Bearer dsk-test', expectedCost: 0.14 + 0.5 * 0.28 },
   { vendor: 'mistral', model: 'mistralai/mistral-small-latest', nakedId: 'mistral-small-latest', baseHost: 'https://api.mistral.ai/v1/', bearer: 'Bearer mk-test', expectedCost: 0.1 + 0.5 * 0.3 },
   { vendor: 'zai', model: 'z-ai/glm-4.6', nakedId: 'glm-4.6', baseHost: 'https://api.z.ai/api/paas/v4/', bearer: 'Bearer zk-test', expectedCost: 0.6 + 0.5 * 2.2 },
+  { vendor: 'qwen', model: 'qwen/qwen-plus', nakedId: 'qwen-plus', baseHost: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/', bearer: 'Bearer qk-test', expectedCost: 0.4 + 0.5 * 1.2 },
 ]
 
 for (const c of CASES) {
