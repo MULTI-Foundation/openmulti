@@ -179,7 +179,17 @@ test('e2e: council via le handler -> 200, cost agrege, trace openmulti', async (
   assert.ok(j.openmulti.council)
 })
 
-test('GET /v1/council/presets : panels par défaut + modèles sélectionnables', async () => {
+test('GET /v1/council/presets : panels par défaut + catalogue OpenRouter sélectionnable', async () => {
+  // Catalogue OpenRouter mocké (le endpoint le fetch désormais) — offline, déterministe.
+  globalThis.fetch = (async (url: string) => {
+    if (String(url).includes('/models')) {
+      return new Response(
+        JSON.stringify({ data: [{ id: 'or/alpha', architecture: { output_modalities: ['text'] } }, { id: 'or/beta' }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response('{}', { status: 200 })
+  }) as any
   const res = await app.fetch(new Request('http://test/v1/council/presets', { headers: { authorization: `Bearer ${KEY}` } }))
   assert.equal(res.status, 200)
   const j = await res.json()
@@ -188,8 +198,10 @@ test('GET /v1/council/presets : panels par défaut + modèles sélectionnables',
   assert.equal(j.chair, 'm/chair')
   assert.equal(j.chairFlash, 'm/fchair')
   assert.ok(Array.isArray(j.models))
-  // les modèles des presets sont toujours sélectionnables (même hors table de prix)
+  // les modèles des presets sont toujours sélectionnables (même hors table de prix)…
   for (const m of ['m/a', 'm/b', 'm/f1', 'm/cheap1']) assert.ok(j.models.includes(m), m)
+  // …et le catalogue OpenRouter complet est exposé
+  for (const m of ['or/alpha', 'or/beta']) assert.ok(j.models.includes(m), m)
 })
 
 test('e2e: stream + council -> 400 (non supporte en MVP)', async () => {
