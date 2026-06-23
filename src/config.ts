@@ -39,6 +39,12 @@ export const config = {
     apiKey: process.env.ZAI_API_KEY || '',
     baseUrl: process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4',
   },
+  // Qwen (Alibaba DashScope, mode OpenAI-compatible). Surface INTERNATIONALE (Singapour).
+  // Endpoint/ids/prix vérifiés le 2026-06-23. Clé région-spécifique.
+  qwen: {
+    apiKey: process.env.QWEN_API_KEY || '',
+    baseUrl: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  },
   // Attribution headers forwarded to the upstream provider.
   referer: process.env.OPENMULTI_REFERER || 'https://openmulti.ai',
   title: process.env.OPENMULTI_TITLE || 'OpenMulti',
