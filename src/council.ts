@@ -35,9 +35,15 @@ export interface CouncilResolved {
 export function resolveCouncil(req: ChatRequest): CouncilResolved | { error: string } {
   const c = req.openmulti?.council ?? {}
   const preset = c.preset || config.council.defaultPreset
-  const presetPanel = preset === 'budget' ? config.council.panelBudget : config.council.panelQuality
+  const presetPanel =
+    preset === 'flash'
+      ? config.council.panelFlash
+      : preset === 'budget'
+        ? config.council.panelBudget
+        : config.council.panelQuality
   const panel = (Array.isArray(c.panel) && c.panel.length ? c.panel : presetPanel).slice(0, MAX_PANEL)
-  const chair = c.chair || config.council.chair
+  // Preset flash : chair rapide (chairFlash) s'il est configuré ; override de requête prime.
+  const chair = c.chair || (preset === 'flash' && config.council.chairFlash ? config.council.chairFlash : config.council.chair)
   const mode = c.mode === 'deliberate' ? 'deliberate' : 'fuse'
   if (!panel.length) return { error: 'council: no panel (set OPENMULTI_COUNCIL_PANEL_* or openmulti.council.panel)' }
   if (!chair) return { error: 'council: no chair (set OPENMULTI_COUNCIL_CHAIR or openmulti.council.chair)' }

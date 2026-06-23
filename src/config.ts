@@ -86,9 +86,13 @@ export const config = {
   // panel+chair explicites dans la requête.
   council: {
     chair: process.env.OPENMULTI_COUNCIL_CHAIR || '',
+    // Chair « flash » (synthétiseur rapide) pour le preset flash ; vide = retombe sur chair.
+    chairFlash: process.env.OPENMULTI_COUNCIL_CHAIR_FLASH || '',
     defaultPreset: process.env.OPENMULTI_COUNCIL_DEFAULT_PRESET || 'quality',
     panelBudget: (process.env.OPENMULTI_COUNCIL_PANEL_BUDGET || '').split(',').map((s) => s.trim()).filter(Boolean),
     panelQuality: (process.env.OPENMULTI_COUNCIL_PANEL_QUALITY || '').split(',').map((s) => s.trim()).filter(Boolean),
+    // Preset « flash » : panel + chair uniquement de modèles rapides -> réponse plus vite.
+    panelFlash: (process.env.OPENMULTI_COUNCIL_PANEL_FLASH || '').split(',').map((s) => s.trim()).filter(Boolean),
   },
   // Marge par défaut sur les tokens, en % (modèle de revenus : le client paie
   // coût × (1 + t/100), via usage.cost et le metering facturable). 0 = passthrough
