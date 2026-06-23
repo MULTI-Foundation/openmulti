@@ -80,6 +80,16 @@ export const config = {
   // Metering durable (Redis/Valkey, cf docs/PRODUCT-V1.md). Vide = désactivé : aucun
   // changement de comportement (dev local, tests).
   redisUrl: process.env.REDIS_URL || '',
+  // Council / fusion (mixture-of-agents, opt-in via openmulti.council ou model:'council').
+  // Panels = config d'exploitation (comme le catalogue), pilotables par env (CSV) ;
+  // toujours surchargeables par requête. Vides = council utilisable seulement avec
+  // panel+chair explicites dans la requête.
+  council: {
+    chair: process.env.OPENMULTI_COUNCIL_CHAIR || '',
+    defaultPreset: process.env.OPENMULTI_COUNCIL_DEFAULT_PRESET || 'quality',
+    panelBudget: (process.env.OPENMULTI_COUNCIL_PANEL_BUDGET || '').split(',').map((s) => s.trim()).filter(Boolean),
+    panelQuality: (process.env.OPENMULTI_COUNCIL_PANEL_QUALITY || '').split(',').map((s) => s.trim()).filter(Boolean),
+  },
   // Marge par défaut sur les tokens, en % (modèle de revenus : le client paie
   // coût × (1 + t/100), via usage.cost et le metering facturable). 0 = passthrough
   // byte-identique (iso, le défaut code) ; surcharge PAR PROJET via

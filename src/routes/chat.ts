@@ -16,6 +16,7 @@ import { meterUsage } from '../meter.js'
 import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
+import { runCouncil } from '../council.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
@@ -58,6 +59,18 @@ chat.post('/v1/chat/completions', async (c) => {
   }
   if (!Array.isArray(req.messages)) {
     return c.json({ error: { message: '`messages` is required', type: 'invalid_request_error' } }, 400)
+  }
+
+  // Council / fusion (mixture-of-agents) — opt-in, NON-STREAM (MVP). L'orchestrateur
+  // fan-out le panel via le routing interne (chemins directs + bandit) puis synthétise ;
+  // chaque sous-appel s'enregistre lui-même (bandit/metering/caps), le coût agrégé est
+  // dans usage.cost. Le flux historique ci-dessous reste inchangé pour les appels normaux.
+  if (req.openmulti?.council || req.model === 'council') {
+    if (req.stream === true) {
+      return c.json({ error: { message: 'streaming is not supported with council yet', type: 'invalid_request_error' } }, 400)
+    }
+    const { status, body } = await runCouncil(req, { key, marginFactor: 1 + marginFor(key) / 100 })
+    return c.json(body, status as 200)
   }
 
   const decision = route(req)
