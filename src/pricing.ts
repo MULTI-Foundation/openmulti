@@ -140,6 +140,11 @@ export function priceFor(model: string): ModelPrice | undefined {
   return registry.prices[model]
 }
 
+/** Ids de modèle tarifés (triés) — base de la liste sélectionnable du council. */
+export function pricedModelIds(): string[] {
+  return Object.keys(registry.prices).sort()
+}
+
 /** Coût USD synthétisé depuis les tokens — `undefined` si le modèle n'est pas tarifé
  * (jamais un faux zéro, cf en-tête). */
 export function computeCostUsd(

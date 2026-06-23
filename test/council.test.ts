@@ -179,6 +179,19 @@ test('e2e: council via le handler -> 200, cost agrege, trace openmulti', async (
   assert.ok(j.openmulti.council)
 })
 
+test('GET /v1/council/presets : panels par défaut + modèles sélectionnables', async () => {
+  const res = await app.fetch(new Request('http://test/v1/council/presets', { headers: { authorization: `Bearer ${KEY}` } }))
+  assert.equal(res.status, 200)
+  const j = await res.json()
+  assert.deepEqual(j.presets.quality, ['m/a', 'm/b'])
+  assert.deepEqual(j.presets.flash, ['m/f1', 'm/f2'])
+  assert.equal(j.chair, 'm/chair')
+  assert.equal(j.chairFlash, 'm/fchair')
+  assert.ok(Array.isArray(j.models))
+  // les modèles des presets sont toujours sélectionnables (même hors table de prix)
+  for (const m of ['m/a', 'm/b', 'm/f1', 'm/cheap1']) assert.ok(j.models.includes(m), m)
+})
+
 test('e2e: stream + council -> 400 (non supporte en MVP)', async () => {
   const res = await app.fetch(
     new Request('http://test/v1/chat/completions', {
