@@ -22,7 +22,7 @@ export interface OpenMultiExtension {
 
 /** Configuration de la délibération council (toutes optionnelles : presets/défauts). */
 export interface CouncilRequest {
-  /** Preset d'exploitation : 'budget' | 'quality' (mappé à un panel cross-famille). */
+  /** Preset d'exploitation : 'flash' (rapide) | 'budget' | 'quality' (mappé à un panel). */
   preset?: string
   /** Override explicite du panel (ids de modèle, 1-8). Prime sur le preset. */
   panel?: string[]

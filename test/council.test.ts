@@ -11,6 +11,8 @@ process.env.OPENMULTI_API_KEYS ||= 'sk_council_test'
 process.env.OPENMULTI_COUNCIL_CHAIR = 'm/chair'
 process.env.OPENMULTI_COUNCIL_PANEL_QUALITY = 'm/a,m/b'
 process.env.OPENMULTI_COUNCIL_PANEL_BUDGET = 'm/cheap1,m/cheap2,m/cheap3'
+process.env.OPENMULTI_COUNCIL_PANEL_FLASH = 'm/f1,m/f2'
+process.env.OPENMULTI_COUNCIL_CHAIR_FLASH = 'm/fchair'
 
 const KEY = 'sk_council_test'
 let P: typeof import('../src/council-prompts.ts')
@@ -56,6 +58,10 @@ test('resolveCouncil: preset par défaut + override de requête', () => {
   assert.equal(def.mode, 'fuse')
   const budget = C.resolveCouncil({ messages: [], openmulti: { council: { preset: 'budget' } } } as any) as any
   assert.deepEqual(budget.panel, ['m/cheap1', 'm/cheap2', 'm/cheap3'])
+  // preset flash -> panel flash + chair flash (synthétiseur rapide)
+  const flash = C.resolveCouncil({ messages: [], openmulti: { council: { preset: 'flash' } } } as any) as any
+  assert.deepEqual(flash.panel, ['m/f1', 'm/f2'])
+  assert.equal(flash.chair, 'm/fchair')
   const override = C.resolveCouncil({ messages: [], openmulti: { council: { panel: ['x/1'], chair: 'x/2', mode: 'deliberate' } } } as any) as any
   assert.deepEqual(override.panel, ['x/1'])
   assert.equal(override.chair, 'x/2')
