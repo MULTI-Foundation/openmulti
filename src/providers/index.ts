@@ -25,6 +25,7 @@ import { deepseekProvider } from './deepseek.js'
 import { mistralProvider } from './mistral.js'
 import { zaiProvider } from './zai.js'
 import { qwenProvider } from './qwen.js'
+import { anthropicProvider } from './anthropic.js'
 import type { Provider } from './types.js'
 
 type DirectMode = 'direct' | 'smart'
@@ -50,6 +51,8 @@ const DIRECT_VENDORS: DirectVendor[] = [
   { prefix: 'mistralai/', envVar: 'OPENMULTI_PROVIDER_MISTRALAI', provider: mistralProvider, apiKey: config.mistral.apiKey },
   { prefix: 'z-ai/', envVar: 'OPENMULTI_PROVIDER_ZAI', provider: zaiProvider, apiKey: config.zai.apiKey },
   { prefix: 'qwen/', envVar: 'OPENMULTI_PROVIDER_QWEN', provider: qwenProvider, apiKey: config.qwen.apiKey },
+  // Anthropic n'est PAS OpenAI-shape : provider dédié à traduction (anthropic.ts), pas la fabrique.
+  { prefix: 'anthropic/', envVar: 'OPENMULTI_PROVIDER_ANTHROPIC', provider: anthropicProvider, apiKey: config.anthropic.apiKey },
 ]
 
 interface ActiveVendor {

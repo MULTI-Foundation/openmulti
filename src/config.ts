@@ -45,6 +45,15 @@ export const config = {
     apiKey: process.env.QWEN_API_KEY || '',
     baseUrl: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
   },
+  // Anthropic DIRECT (spec multi-provider §5) — seul provider NON OpenAI-shape : API
+  // /v1/messages, auth x-api-key + anthropic-version, traduction OpenAI<->Anthropic.
+  // max_tokens est REQUIS côté Anthropic : défaut quand l'appelant ne le pose pas.
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    baseUrl: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+    version: process.env.ANTHROPIC_VERSION || '2023-06-01',
+    defaultMaxTokens: Math.max(1, Number(process.env.OPENMULTI_ANTHROPIC_DEFAULT_MAX_TOKENS ?? 8192)),
+  },
   // Attribution headers forwarded to the upstream provider.
   referer: process.env.OPENMULTI_REFERER || 'https://openmulti.ai',
   title: process.env.OPENMULTI_TITLE || 'OpenMulti',
