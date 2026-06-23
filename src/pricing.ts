@@ -79,6 +79,15 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'qwen/qwen3.5-flash': { inputPerMTok: 0.1, outputPerMTok: 0.4 },
   'qwen/qwen-turbo': { inputPerMTok: 0.05, outputPerMTok: 0.2 },
   'qwen/qwen3-235b-a22b': { inputPerMTok: 0.7, outputPerMTok: 2.8 },
+
+  // Anthropic direct — vérifié le 2026-06-23 via la référence officielle (claude-api).
+  // Input = plein tarif (le cache hit, ~0.1x, n'est pas modélisé → borne haute).
+  'anthropic/claude-fable-5': { inputPerMTok: 10, outputPerMTok: 50 },
+  'anthropic/claude-opus-4-8': { inputPerMTok: 5, outputPerMTok: 25 },
+  'anthropic/claude-opus-4-7': { inputPerMTok: 5, outputPerMTok: 25 },
+  'anthropic/claude-opus-4-6': { inputPerMTok: 5, outputPerMTok: 25 },
+  'anthropic/claude-sonnet-4-6': { inputPerMTok: 3, outputPerMTok: 15 },
+  'anthropic/claude-haiku-4-5': { inputPerMTok: 1, outputPerMTok: 5 },
 }
 
 export interface PricingParse {
