@@ -18,6 +18,27 @@ export const config = {
     apiKey: process.env.MOONSHOT_API_KEY || '',
     baseUrl: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1',
   },
+  // Autres chemins directs OpenAI-compatibles (spec multi-provider §3). Mêmes règles
+  // que Moonshot : clé OPTIONNELLE (vide = fallback OpenRouter), activés par
+  // OPENMULTI_PROVIDER_<VENDOR>=direct|smart. Endpoints/ids/prix vérifiés le 2026-06-22
+  // contre les docs officielles (cf src/pricing.ts).
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY || '',
+    baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+  },
+  deepseek: {
+    apiKey: process.env.DEEPSEEK_API_KEY || '',
+    // Base SANS /v1 (canonique chez DeepSeek ; /chat/completions est ajouté par la fabrique).
+    baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+  },
+  mistral: {
+    apiKey: process.env.MISTRAL_API_KEY || '',
+    baseUrl: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+  },
+  zai: {
+    apiKey: process.env.ZAI_API_KEY || '',
+    baseUrl: process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4',
+  },
   // Attribution headers forwarded to the upstream provider.
   referer: process.env.OPENMULTI_REFERER || 'https://openmulti.ai',
   title: process.env.OPENMULTI_TITLE || 'OpenMulti',

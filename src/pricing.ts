@@ -23,11 +23,48 @@ export interface ModelPrice {
 
 // Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
 // moment-là contre la page du vendor (jamais de prix de mémoire).
+// Les clés sont les ids de CATALOGUE (style OpenRouter, vendor/model) — c'est l'id que
+// reçoit computeCostUsd, pas l'id nu envoyé au provider. Input = cache MISS quand un
+// vendor tarife le cache (borne haute côté input). Tout prix peut être corrigé sans
+// release via OPENMULTI_PRICING_JSON (l'override gagne, entrée par entrée), et un id
+// hors table = pas de cost (warning + métrique), jamais un faux zéro.
 const DEFAULTS: Record<string, ModelPrice> = {
   // Moonshot direct — vérifié le 2026-06-10 sur platform.kimi.ai/docs/pricing/chat-k26.
   // Input = cache MISS ($0.95/MTok) : le cache hit ($0.16) n'est pas modélisé, le coût
   // synthétisé est donc une borne haute côté input.
   'moonshotai/kimi-k2.6': { inputPerMTok: 0.95, outputPerMTok: 4 },
+
+  // OpenAI direct — vérifié le 2026-06-22 sur developers.openai.com/api/docs/pricing.
+  'openai/gpt-5.5': { inputPerMTok: 5, outputPerMTok: 30 },
+  'openai/gpt-5.4': { inputPerMTok: 2.5, outputPerMTok: 15 },
+  'openai/gpt-5.4-mini': { inputPerMTok: 0.75, outputPerMTok: 4.5 },
+  'openai/gpt-5.4-nano': { inputPerMTok: 0.2, outputPerMTok: 1.25 },
+  'openai/gpt-5': { inputPerMTok: 1.25, outputPerMTok: 10 },
+  'openai/gpt-4.1': { inputPerMTok: 2, outputPerMTok: 8 },
+  'openai/gpt-4o-mini': { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+
+  // DeepSeek direct — vérifié le 2026-06-22 sur api-docs.deepseek.com/quick_start/pricing
+  // (prix = cache MISS). deepseek-chat/-reasoner mappent v4-flash.
+  'deepseek/deepseek-chat': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
+  'deepseek/deepseek-reasoner': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
+  'deepseek/deepseek-v4-flash': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
+  'deepseek/deepseek-v4-pro': { inputPerMTok: 0.435, outputPerMTok: 0.87 },
+
+  // Mistral direct — vérifié le 2026-06-22 sur mistral.ai/pricing.
+  'mistralai/mistral-large-latest': { inputPerMTok: 0.5, outputPerMTok: 1.5 },
+  'mistralai/mistral-medium-latest': { inputPerMTok: 1.5, outputPerMTok: 7.5 },
+  'mistralai/mistral-small-latest': { inputPerMTok: 0.1, outputPerMTok: 0.3 },
+  'mistralai/codestral-latest': { inputPerMTok: 0.3, outputPerMTok: 0.9 },
+  'mistralai/devstral-latest': { inputPerMTok: 0.4, outputPerMTok: 2 },
+
+  // Z.ai (GLM) direct — vérifié le 2026-06-22 sur docs.z.ai/guides/overview/pricing.
+  // (Les variantes gratuites glm-*-flash sont volontairement hors table : un « 0 »
+  // ferait croire au bandit à un chemin gratuit illimité.)
+  'z-ai/glm-4.6': { inputPerMTok: 0.6, outputPerMTok: 2.2 },
+  'z-ai/glm-4.5': { inputPerMTok: 0.6, outputPerMTok: 2.2 },
+  'z-ai/glm-4.5-air': { inputPerMTok: 0.2, outputPerMTok: 1.1 },
+  'z-ai/glm-4.5-x': { inputPerMTok: 2.2, outputPerMTok: 8.9 },
+  'z-ai/glm-4.5-airx': { inputPerMTok: 1.1, outputPerMTok: 4.5 },
 }
 
 export interface PricingParse {
