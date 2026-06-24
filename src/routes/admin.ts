@@ -4,8 +4,10 @@
 
 import { Hono } from 'hono'
 import { readUsage, readAllUsage } from '../meter.js'
-import { createKey, revokeKey, listKeys, setCap, setMargin, listMargins, addCredits, balanceReport } from '../keys.js'
+import { createKey, revokeKey, listKeys, setCap, listCaps, setMargin, listMargins, addCredits, balanceReport } from '../keys.js'
 import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../catalog-overrides.js'
+import { setCouncilSlot, deleteCouncilSlot, councilOverrides } from '../council-overrides.js'
+import { effectiveCouncil } from '../council.js'
 import { catalogFileSlots } from '../catalog-file.js'
 import { candidatesFor } from '../catalog.js'
 import { log } from '../log.js'
@@ -121,6 +123,38 @@ admin.delete('/admin/catalog/:slot', async (c) => {
   return c.json({ cleared: c.req.param('slot') })
 })
 
+// ── Council « à la volée » (panels par preset + chairs + preset par défaut) ─────
+// GET  /admin/council            -> overrides actifs + config effective (override > env).
+// PUT  /admin/council/:slot      -> panel* : { value: ["vendor/model", ...] } (1..8)
+//                                   chair|chairFlash : { value: "vendor/model" }
+//                                   defaultPreset : { value: "flash|budget|quality" }
+// DELETE /admin/council/:slot    -> retombe sur l'env.
+
+admin.get('/admin/council', (c) =>
+  c.json({ overrides: councilOverrides(), effective: effectiveCouncil() }),
+)
+
+admin.put('/admin/council/:slot', async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { value?: unknown } | null
+  if (body === null || body.value === undefined) {
+    return c.json({ error: { message: '`value` is required (array for panels, string for chair/preset)', type: 'invalid_request_error' } }, 400)
+  }
+  const err = await setCouncilSlot(c.req.param('slot'), body.value)
+  if (err) {
+    const disabled = err.includes('REDIS_URL')
+    return c.json({ error: { message: err, type: disabled ? 'council_disabled' : 'invalid_request_error' } }, disabled ? 503 : 400)
+  }
+  log.info('admin_council_set', { slot: c.req.param('slot'), value: body.value })
+  return c.json({ slot: c.req.param('slot'), value: body.value })
+})
+
+admin.delete('/admin/council/:slot', async (c) => {
+  const ok = await deleteCouncilSlot(c.req.param('slot'))
+  if (!ok) return c.json({ error: { message: 'No override on this slot (or store disabled)', type: 'not_found' } }, 404)
+  log.info('admin_council_cleared', { slot: c.req.param('slot') })
+  return c.json({ cleared: c.req.param('slot') })
+})
+
 // ── Marge sur les tokens (modèle de revenus) ────────────────────────────────────
 // GET /admin/margins -> defaut global + surcharges ; PUT { pct } (null = retour au
 // defaut). Le client paie cout x (1 + pct/100), visible dans usage.cost.
@@ -137,6 +171,9 @@ admin.put('/admin/margins/:project', async (c) => {
   log.info('admin_margin_set', { project: c.req.param('project'), pct: body.pct })
   return c.json({ project: c.req.param('project'), pct: body.pct })
 })
+
+// GET /admin/caps -> plafonds journaliers par projet (USD facturés).
+admin.get('/admin/caps', (c) => c.json({ overrides: listCaps() }))
 
 // PUT /admin/caps/:project { usdPerDay } -> plafond journalier du projet (0 = retire).
 admin.put('/admin/caps/:project', async (c) => {
