@@ -256,6 +256,11 @@ export function listMargins(): { defaultPct: number; overrides: Record<string, n
   return { defaultPct: config.marginPct, overrides: Object.fromEntries(margins) }
 }
 
+/** Plafonds journaliers par projet (USD facturés). Pour l'admin (GET /admin/caps). */
+export function listCaps(): Record<string, number> {
+  return Object.fromEntries(caps)
+}
+
 export async function setCap(project: string, usdPerDay: number): Promise<boolean> {
   if (!PROJECT_RE.test(project) || !Number.isFinite(usdPerDay) || usdPerDay < 0) return false
   const c = storeClient()

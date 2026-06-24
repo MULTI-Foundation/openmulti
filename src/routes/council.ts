@@ -9,7 +9,7 @@
 // OpenRouter injoignable -> on retombe sur tarifés ∪ presets (fail-open).
 
 import { Hono } from 'hono'
-import { config } from '../config.js'
+import { effectiveCouncil } from '../council.js'
 import { pricedModelIds } from '../pricing.js'
 import { fetchModelIds } from '../openrouter-catalog.js'
 import type { AppEnv } from '../types.js'
@@ -17,22 +17,23 @@ import type { AppEnv } from '../types.js'
 export const council = new Hono<AppEnv>()
 
 council.get('/v1/council/presets', async (c) => {
+  const eff = effectiveCouncil() // override admin à chaud > env
   const presets = {
-    flash: config.council.panelFlash,
-    budget: config.council.panelBudget,
-    quality: config.council.panelQuality,
+    flash: eff.panelFlash,
+    budget: eff.panelBudget,
+    quality: eff.panelQuality,
   }
   const catalog = await fetchModelIds()
   const set = new Set<string>([...catalog, ...pricedModelIds()])
   for (const p of Object.values(presets)) for (const m of p) set.add(m)
-  if (config.council.chair) set.add(config.council.chair)
-  if (config.council.chairFlash) set.add(config.council.chairFlash)
+  if (eff.chair) set.add(eff.chair)
+  if (eff.chairFlash) set.add(eff.chairFlash)
 
   return c.json({
-    defaultPreset: config.council.defaultPreset,
+    defaultPreset: eff.defaultPreset,
     presets,
-    chair: config.council.chair,
-    chairFlash: config.council.chairFlash,
+    chair: eff.chair,
+    chairFlash: eff.chairFlash,
     models: [...set].sort(),
   })
 })

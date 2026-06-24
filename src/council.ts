@@ -9,6 +9,7 @@
 // que via OpenRouter), et un preset « budget » de modèles ouverts vise le quasi-frontier.
 
 import { config } from './config.js'
+import { councilOverrides } from './council-overrides.js'
 import { forwardChatNonStream, type ForwardCtx, type ForwardResult } from './forward.js'
 import {
   responseText,
@@ -31,19 +32,35 @@ export interface CouncilResolved {
   mode: 'fuse' | 'deliberate'
 }
 
-/** Panel/chair/mode effectifs : override de requête > preset > config. */
+/** Config council effective : override admin à chaud (Redis) > env. Source unique
+ * pour resolveCouncil et la route GET /v1/council/presets. */
+export function effectiveCouncil() {
+  const o = councilOverrides()
+  const c = config.council
+  return {
+    chair: o.chair ?? c.chair,
+    chairFlash: o.chairFlash ?? c.chairFlash,
+    defaultPreset: o.defaultPreset ?? c.defaultPreset,
+    panelBudget: o.panelBudget ?? c.panelBudget,
+    panelQuality: o.panelQuality ?? c.panelQuality,
+    panelFlash: o.panelFlash ?? c.panelFlash,
+  }
+}
+
+/** Panel/chair/mode effectifs : override de requête > preset (override admin > env). */
 export function resolveCouncil(req: ChatRequest): CouncilResolved | { error: string } {
   const c = req.openmulti?.council ?? {}
-  const preset = c.preset || config.council.defaultPreset
+  const eff = effectiveCouncil()
+  const preset = c.preset || eff.defaultPreset
   const presetPanel =
     preset === 'flash'
-      ? config.council.panelFlash
+      ? eff.panelFlash
       : preset === 'budget'
-        ? config.council.panelBudget
-        : config.council.panelQuality
+        ? eff.panelBudget
+        : eff.panelQuality
   const panel = (Array.isArray(c.panel) && c.panel.length ? c.panel : presetPanel).slice(0, MAX_PANEL)
   // Preset flash : chair rapide (chairFlash) s'il est configuré ; override de requête prime.
-  const chair = c.chair || (preset === 'flash' && config.council.chairFlash ? config.council.chairFlash : config.council.chair)
+  const chair = c.chair || (preset === 'flash' && eff.chairFlash ? eff.chairFlash : eff.chair)
   const mode = c.mode === 'deliberate' ? 'deliberate' : 'fuse'
   if (!panel.length) return { error: 'council: no panel (set OPENMULTI_COUNCIL_PANEL_* or openmulti.council.panel)' }
   if (!chair) return { error: 'council: no chair (set OPENMULTI_COUNCIL_CHAIR or openmulti.council.chair)' }

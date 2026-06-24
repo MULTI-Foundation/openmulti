@@ -7,13 +7,15 @@ import { makeShutdown, type Closable } from './shutdown.js'
 import { initStore } from './store.js'
 import { initKeys } from './keys.js'
 import { initCatalogOverrides } from './catalog-overrides.js'
+import { initCouncilOverrides } from './council-overrides.js'
 import { log } from './log.js'
 
-// Store partagé (metering durable + registre de clés + overrides de catalogue) —
+// Store partagé (metering durable + registre de clés + overrides catalog/council) —
 // no-op sans REDIS_URL, jamais bloquant pour le boot.
 initStore()
 initKeys()
 initCatalogOverrides()
+initCouncilOverrides()
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   log.info('listening', { port: info.port })
