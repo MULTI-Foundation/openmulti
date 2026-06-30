@@ -39,7 +39,11 @@ function fakeClient() {
       return Object.fromEntries(store.get(k) ?? new Map())
     },
     async hSet(k: string, f: string, v: string) {
-      hash(k).set(f, v)
+      // sémantique Redis : 1 si champ nouveau, 0 s'il existait (cf addCredits dédup atomique)
+      const h = hash(k)
+      const isNew = !h.has(f)
+      h.set(f, v)
+      return isNew ? 1 : 0
     },
     async hDel(k: string, f: string) {
       hash(k).delete(f)

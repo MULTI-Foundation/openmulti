@@ -77,6 +77,10 @@ export const config = {
   // OM-03: dedicated ops token for GET /metrics. Empty = fall back to caller-key auth
   // (current behavior). Set it in any deployed env to stop cross-tenant metric reads.
   metricsToken: process.env.OPENMULTI_METRICS_TOKEN || '',
+  // audit #4 : token admin DISTINCT du token /metrics. Si posé, les routes /admin/*
+  // l'exigent (le token /metrics ne donne plus l'écriture admin). Vide = repli sur
+  // metricsToken (rétro-compat, zéro régression).
+  adminToken: process.env.OPENMULTI_ADMIN_TOKEN || '',
   // Metering durable (Redis/Valkey, cf docs/PRODUCT-V1.md). Vide = désactivé : aucun
   // changement de comportement (dev local, tests).
   redisUrl: process.env.REDIS_URL || '',

@@ -47,7 +47,10 @@ function bucket(key: string, model: string, provider: string): Stat {
  */
 export function keyLabel(apiKey: string | undefined): string {
   if (!apiKey) return 'anon'
-  const m = /^sk_([a-z0-9-]+)_/i.exec(apiKey)
+  // audit #7 : PAS de flag `i`. Les projets du registre sont en minuscules (PROJECT_RE) ;
+  // une clé `sk_Foo_…` ne doit pas produire le label `Foo` (sinon évasion de cap/solde, les
+  // lookups étant sensibles à la casse). Casse mixte -> pas de match -> hash (bucket propre).
+  const m = /^sk_([a-z0-9-]+)_/.exec(apiKey)
   if (m) return m[1]!
   return createHash('sha256').update(apiKey).digest('hex').slice(0, 8)
 }
