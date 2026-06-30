@@ -174,9 +174,11 @@ export async function addCredits(project: string, usd: number, ref: string): Pro
   const c = storeClient()
   if (!c) return null
   const refField = `${project}|${ref}`
-  const seen = await c.hGetAll(CREDIT_REFS)
-  if (refField in seen) return 'duplicate'
-  await c.hSet(CREDIT_REFS, refField, String(usd))
+  // audit #8 : dédup ATOMIQUE. HSET renvoie 1 si le champ est nouveau, 0 s'il existait.
+  // Redis exécute les commandes en série -> sous redelivery concurrent du MÊME event, une
+  // seule exécution voit 1 et crédite (le read-then-write précédent pouvait double-créditer).
+  const fresh = (await c.hSet(CREDIT_REFS, refField, String(usd))) as number
+  if (fresh === 0) return 'duplicate'
   await c.hIncrByFloat(CREDITS, project, usd)
   await refreshKeys()
   return credits.get(project) ?? usd
