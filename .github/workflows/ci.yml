@@ -89,15 +89,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/setup-kubectl@v4
-      - name: Configure kubeconfig (scoped SA, openmulti-prod only)
+      # Déploiement via SSH forced-command (audit #2/#3) : l'API k3s :6443 n'est PAS
+      # exposée publiquement. Le serveur n'autorise que `set image` sur les déploiements
+      # openmulti connus (clé restreinte, pas de token API longue-durée baladé).
+      - name: Roll out new image (SSH forced-command)
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          HOST: ${{ secrets.PROD_SSH_HOST }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.PROD_KUBECONFIG }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-      - name: Roll out new image
-        # L'image du commit taggue a deja ete buildee/poussee/signee a son push sur main.
-        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
           IMG=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${GITHUB_SHA}
-          kubectl -n openmulti-prod set image deployment/openmulti openmulti=$IMG
-          kubectl -n openmulti-prod rollout status deployment/openmulti --timeout=180s
+          ssh -i ~/.ssh/deploy root@"$HOST" "openmulti-prod openmulti $IMG"
