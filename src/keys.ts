@@ -166,6 +166,17 @@ export function checkBalance(project: string): BalanceVerdict {
   return { blocked: balance <= 0, balanceUsd: balance }
 }
 
+// audit 2026-07-02 : dédup ET crédit dans UN script Lua — un crash entre les deux
+// commandes ne peut plus marquer la ref appliquée sans avoir crédité (crédit perdu).
+// HSETNX (vs HSET) : une redelivery avec un montant différent ne réécrit pas le
+// montant enregistré de la ref. Retourne nil si duplicate, sinon le nouveau total.
+const ADD_CREDITS_LUA = `
+if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 0 then
+  return nil
+end
+return redis.call('HINCRBYFLOAT', KEYS[2], ARGV[3], ARGV[2])
+`.trim()
+
 /** Top-up idempotent (ref = id d'événement Stripe côté console). Retourne le nouveau
  * total crédité, ou null si store coupé / entrée invalide ; 'duplicate' si la ref a
  * déjà été appliquée (la console peut re-livrer un webhook sans double-créditer). */
@@ -174,12 +185,17 @@ export async function addCredits(project: string, usd: number, ref: string): Pro
   const c = storeClient()
   if (!c) return null
   const refField = `${project}|${ref}`
-  // audit #8 : dédup ATOMIQUE. HSET renvoie 1 si le champ est nouveau, 0 s'il existait.
-  // Redis exécute les commandes en série -> sous redelivery concurrent du MÊME event, une
-  // seule exécution voit 1 et crédite (le read-then-write précédent pouvait double-créditer).
-  const fresh = (await c.hSet(CREDIT_REFS, refField, String(usd))) as number
-  if (fresh === 0) return 'duplicate'
-  await c.hIncrByFloat(CREDITS, project, usd)
+  if (c.eval) {
+    const total = await c.eval(ADD_CREDITS_LUA, { keys: [CREDIT_REFS, CREDITS], arguments: [refField, String(usd), project] })
+    if (total === null) return 'duplicate'
+  } else {
+    // Repli deux temps (client sans eval) — audit #8 : dédup atomique via le retour de
+    // HSET (1 = champ nouveau). Fenêtre de crash résiduelle entre les deux commandes,
+    // fermée par le chemin Lua ci-dessus en production.
+    const fresh = (await c.hSet(CREDIT_REFS, refField, String(usd))) as number
+    if (fresh === 0) return 'duplicate'
+    await c.hIncrByFloat(CREDITS, project, usd)
+  }
   await refreshKeys()
   return credits.get(project) ?? usd
 }

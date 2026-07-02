@@ -98,6 +98,27 @@ export const config = {
     // Preset « flash » : panel + chair uniquement de modèles rapides -> réponse plus vite.
     panelFlash: (process.env.OPENMULTI_COUNCIL_PANEL_FLASH || '').split(',').map((s) => s.trim()).filter(Boolean),
   },
+  // B2 (PRODUCT-V1) : signup self-service agent-natif. OPT-IN (OPENMULTI_SIGNUP=1),
+  // défaut off = zéro régression. Fail-closed : exige le store partagé (REDIS_URL).
+  // La vérification email est le seul clic humain ; tout le reste est scriptable.
+  signup: {
+    enabled: process.env.OPENMULTI_SIGNUP === '1',
+    // Plafond par défaut du projet créé (USD facturés/jour) — minuscule volontairement,
+    // relevable à chaud via PUT /admin/caps/:project.
+    capUsdPerDay: Math.max(0.01, Number(process.env.OPENMULTI_SIGNUP_CAP_USD ?? 0.1)),
+    // Garde-fou global : signups vérifiés max par jour UTC (borne le coût d'un abus
+    // distribué que la limite par IP ne voit pas).
+    perDay: Math.max(1, Number(process.env.OPENMULTI_SIGNUP_PER_DAY ?? 50)),
+    // Limite par IP (fenêtre fixe 60s), plus stricte que le rate limit du trafic.
+    ratePerMin: Math.max(1, Number(process.env.OPENMULTI_SIGNUP_RATE_PER_MIN ?? 3)),
+  },
+  // Envoi d'email (vérification signup). 'log' = pas d'envoi, le code part dans les
+  // logs (dev/staging) ; 'resend' = API Resend (RESEND_API_KEY requis).
+  email: {
+    provider: (process.env.OPENMULTI_EMAIL_PROVIDER === 'resend' ? 'resend' : 'log') as 'resend' | 'log',
+    from: process.env.OPENMULTI_EMAIL_FROM || 'onboarding@openmulti.ai',
+    resendApiKey: process.env.RESEND_API_KEY || '',
+  },
   // Marge par défaut sur les tokens, en % (modèle de revenus : le client paie
   // coût × (1 + t/100), via usage.cost et le metering facturable). 0 = passthrough
   // byte-identique (iso, le défaut code) ; surcharge PAR PROJET via

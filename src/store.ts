@@ -16,6 +16,15 @@ export interface StoreClient {
   hSet(key: string, field: string, value: string): Promise<unknown>
   hDel(key: string, field: string): Promise<unknown>
   incr(key: string): Promise<number>
+  // Clés simples avec TTL (état pending du signup, B2) — sémantique redis v4.
+  // OPTIONNELLES pour ne pas casser les fakes de test existants : le signup est
+  // fail-closed et traite un client sans ces méthodes comme un store indisponible.
+  get?(key: string): Promise<string | null>
+  set?(key: string, value: string, opts?: { EX?: number }): Promise<unknown>
+  del?(key: string): Promise<unknown>
+  // Scripts Lua (mutations multi-clés atomiques, cf addCredits). Optionnelle : un
+  // client sans eval retombe sur le chemin historique en deux temps.
+  eval?(script: string, opts: { keys: string[]; arguments: string[] }): Promise<unknown>
 }
 
 let client: StoreClient | null = null

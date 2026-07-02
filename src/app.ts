@@ -10,6 +10,7 @@ import { plan } from './routes/plan.js'
 import { council } from './routes/council.js'
 import { embeddings } from './routes/embeddings.js'
 import { admin } from './routes/admin.js'
+import { signup } from './routes/signup.js'
 import { renderProm } from './metrics.js'
 import { config } from './config.js'
 import type { AppEnv } from './types.js'
@@ -49,3 +50,8 @@ app.route('/', embeddings)
 // Routes d'admin (metering durable, bientôt cycle de vie des clés) : token ops strict.
 app.use('/admin/*', adminAuth)
 app.route('/', admin)
+
+// B2 : signup self-service — PUBLIC par construction (le point d'entrée d'un inconnu),
+// donc hors des middlewares /v1 ; toutes ses gardes (opt-in 404, corps borné, rate
+// limit IP, plafond global/jour, fail-closed) vivent dans routes/signup.ts + signup.ts.
+app.route('/', signup)

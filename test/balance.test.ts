@@ -51,6 +51,19 @@ function fakeClient() {
     async incr() {
       return 1
     },
+    // Émule le contrat du script ADD_CREDITS_LUA (keys.ts) : HSETNX de la ref puis
+    // HINCRBYFLOAT du crédit, en un pas. nil (null) si la ref existait déjà.
+    async eval(_script: string, opts: { keys: string[]; arguments: string[] }) {
+      const [refsKey, creditsKey] = opts.keys as [string, string]
+      const [refField, usd, project] = opts.arguments as [string, string, string]
+      const refs = hash(refsKey)
+      if (refs.has(refField)) return null
+      refs.set(refField, usd)
+      const h = hash(creditsKey)
+      const total = Number(h.get(project) ?? 0) + Number(usd)
+      h.set(project, String(total))
+      return String(total)
+    },
   }
 }
 
@@ -92,6 +105,23 @@ test('top-up idempotent : meme ref jamais double-creditee', async () => {
   // validations
   assert.equal((await admin('POST', '/admin/credits/acme', { usd: -2, ref: 'x' })).status, 400)
   assert.equal((await admin('POST', '/admin/credits/acme', { usd: 1 })).status, 400)
+})
+
+test('duplicate avec un montant DIFFÉRENT : ni crédité, ni montant de la ref réécrit (HSETNX)', async () => {
+  await admin('POST', '/admin/credits/acme', { usd: 10, ref: 'evt_a' })
+  const res = await admin('POST', '/admin/credits/acme', { usd: 999, ref: 'evt_a' })
+  assert.equal((await res.json()).duplicate, true)
+  assert.equal(client.store.get('credits:usd')?.get('acme'), '10')
+  assert.equal(client.store.get('credits:refs')?.get('acme|evt_a'), '10', 'montant de la ref réécrit')
+})
+
+test('repli sans eval (fake historique) : idempotence conservée en deux temps', async () => {
+  ;(client as { eval?: unknown }).eval = undefined
+  let res = await admin('POST', '/admin/credits/acme', { usd: 7, ref: 'evt_f' })
+  assert.equal((await res.json()).creditsUsd, 7)
+  res = await admin('POST', '/admin/credits/acme', { usd: 7, ref: 'evt_f' })
+  assert.equal((await res.json()).duplicate, true)
+  assert.equal(client.store.get('credits:usd')?.get('acme'), '7')
 })
 
 test('le solde decompte le facture (x1.2) et bloque a zero avec 402', async () => {
