@@ -18,6 +18,7 @@
 // client), arrondi au micro-dollar SUPÉRIEUR : une borne s'arrondit vers le haut.
 
 import { computeCostUsd } from './pricing.js'
+import { completionCount, effectiveOutputCap } from './output-bounds.js'
 import type { ChatRequest } from './types.js'
 
 export interface Quote {
@@ -65,10 +66,13 @@ export function computeQuote(
 ): QuoteResult {
   if (hasNonTextContent(req)) return { quote: null, unavailable: 'unsupported_content' }
 
-  const requested = typeof req.max_tokens === 'number' && req.max_tokens > 0 ? req.max_tokens : undefined
-  const ceiling = maxTokensCeiling && maxTokensCeiling > 0 ? maxTokensCeiling : undefined
-  const outputMax = requested !== undefined && ceiling !== undefined ? Math.min(requested, ceiling) : requested ?? ceiling
-  if (outputMax === undefined) return { quote: null, unavailable: 'no_output_bound' }
+  // Borne de sortie par complétion (prend en compte max_completion_tokens ET le plafond
+  // de tier), multipliée par n : c'est le total de tokens de sortie que l'exécution du
+  // MÊME modèle épinglé peut facturer au pire (audit sécu : n et max_completion_tokens
+  // contournaient la borne).
+  const perCompletion = effectiveOutputCap(req, maxTokensCeiling)
+  if (perCompletion === undefined) return { quote: null, unavailable: 'no_output_bound' }
+  const outputMax = perCompletion * completionCount(req)
 
   const inputMax = Buffer.byteLength(JSON.stringify(req), 'utf8')
   const rawMax = computeCostUsd(model, inputMax, outputMax)

@@ -8,6 +8,8 @@
 // keyLabel) times the catalog of models.
 
 import { createHash } from 'node:crypto'
+import { catalogModels, IMAGE_MODEL, EMBEDDING_MODEL } from './catalog.js'
+import { pricedModelIds } from './pricing.js'
 
 interface Stat {
   requests: number
@@ -29,8 +31,39 @@ const stats = new Map<string, Stat>()
 // chemins, au coût/santé différents. 'openrouter' par défaut (l'unique chemin historique).
 const DEFAULT_PROVIDER = 'openrouter'
 
+// Le label `model` d'une requête peut être CONTRÔLÉ par l'appelant (id concret épinglé
+// contenant '/', ou membre d'un panel council) — non borné, il ferait exploser la
+// cardinalité des Maps stats/bandit (OOM + boucle d'amortissement O(n) qui pénalise TOUS
+// les tenants du process partagé). On borne donc le label à l'ensemble des modèles
+// CONNUS (catalogue ∪ tarifés ∪ image/embedding) ; tout le reste retombe sur 'other'
+// — même pattern que keyLabel pour les clés inconnues. Les modèles réellement consultés
+// par le bandit (candidats de tier, modèles à chemin direct tarifés) sont tous connus,
+// donc ce repli n'altère aucune sélection ; il ne borne que la cardinalité (audit sécu).
+let knownModelsCache: Set<string> | null = null
+function knownModels(): Set<string> {
+  if (knownModelsCache) return knownModelsCache
+  const s = new Set<string>(pricedModelIds())
+  for (const e of catalogModels()) s.add(e.model)
+  s.add(IMAGE_MODEL)
+  s.add(EMBEDDING_MODEL)
+  knownModelsCache = s
+  return s
+}
+/** Réinitialise le cache de l'allowlist de modèles (tests + après un override admin). */
+export function _resetKnownModels(): void {
+  knownModelsCache = null
+}
+/** Test helper : fixe l'allowlist de modèles (les tests bandit/select pilotent
+ * selectModel avec des ids synthétiques qui ne sont pas dans un catalogue). */
+export function _setKnownModelsForTest(ids: string[]): void {
+  knownModelsCache = new Set(ids)
+}
+function labelModel(model: string): string {
+  return knownModels().has(model) ? model : 'other'
+}
+
 function bucket(key: string, model: string, provider: string): Stat {
-  const id = `${key}${SEP}${model}${SEP}${provider}`
+  const id = `${key}${SEP}${labelModel(model)}${SEP}${provider}`
   let s = stats.get(id)
   if (!s) {
     s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, billedUsd: 0, durationMsSum: 0, durationCount: 0 }
@@ -136,8 +169,9 @@ const bandit = new Map<string, ModelAggregate>()
  * sélection de modèle par tier — le tier ne se soucie pas du chemin). */
 export function modelAggregate(model: string): ModelAggregate {
   const out = { requests: 0, errors: 0, costUsd: 0 }
+  const wanted = labelModel(model)
   for (const [id, b] of bandit) {
-    if (id.slice(id.indexOf(SEP) + 1) === model) {
+    if (id.slice(id.indexOf(SEP) + 1) === wanted) {
       out.requests += b.requests
       out.errors += b.errors
       out.costUsd += b.costUsd
@@ -149,7 +183,7 @@ export function modelAggregate(model: string): ModelAggregate {
 /** Stats amorties d'un (chemin d'accès, modèle) précis — la vue de l'arbitrage de
  * chemin (providers/index.ts, mode 'smart'). */
 export function pathAggregate(provider: string, model: string): ModelAggregate {
-  const b = bandit.get(`${provider}${SEP}${model}`)
+  const b = bandit.get(`${provider}${SEP}${labelModel(model)}`)
   return b ? { ...b } : { requests: 0, errors: 0, costUsd: 0 }
 }
 
@@ -174,7 +208,7 @@ export function recordRequest(r: RequestRecord): void {
       b.costUsd *= RHO
     }
   }
-  const banditId = `${provider}${SEP}${r.model}`
+  const banditId = `${provider}${SEP}${labelModel(r.model)}`
   let b = bandit.get(banditId)
   if (!b) {
     b = { requests: 0, errors: 0, costUsd: 0 }
@@ -186,7 +220,10 @@ export function recordRequest(r: RequestRecord): void {
 }
 
 function esc(v: string): string {
-  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
+  // Prometheus : échapper \, " et les sauts de ligne. Le \r doit l'être aussi, sinon un
+  // label contrôlé par l'appelant contenant un CR peut casser/injecter une ligne de
+  // l'exposition /metrics (audit sécu 2026-07-02).
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
 }
 
 /** Render the registry in Prometheus text exposition format (version 0.0.4). */
@@ -282,4 +319,5 @@ export function _resetMetrics(): void {
   pathFallbacks.clear()
   meterDrops = 0
   fieldsStripped = 0
+  knownModelsCache = null
 }

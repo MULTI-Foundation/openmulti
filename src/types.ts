@@ -45,6 +45,10 @@ export interface ChatRequest {
   messages: ChatMessage[]
   stream?: boolean
   max_tokens?: number
+  /** API OpenAI moderne : prime sur max_tokens (déprécié). Dans l'allowlist upstream. */
+  max_completion_tokens?: number
+  /** Nombre de complétions ; multiplie les tokens de sortie facturés. Dans l'allowlist. */
+  n?: number
   temperature?: number
   usage?: { include?: boolean }
   provider?: Record<string, unknown>

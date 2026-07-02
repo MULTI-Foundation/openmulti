@@ -25,6 +25,8 @@ import type { ChatRequest } from './types.js'
 type Dict = Record<string, unknown>
 
 const MAX_PANEL = 8
+// Même forme que catalog-overrides/council-overrides : id de modèle plausible.
+const MODEL_RE = /^[a-z0-9][a-z0-9._:/-]{1,127}$/i
 
 export interface CouncilResolved {
   panel: string[]
@@ -58,7 +60,11 @@ export function resolveCouncil(req: ChatRequest): CouncilResolved | { error: str
       : preset === 'budget'
         ? eff.panelBudget
         : eff.panelQuality
-  const panel = (Array.isArray(c.panel) && c.panel.length ? c.panel : presetPanel).slice(0, MAX_PANEL)
+  // Le panel fourni par l'appelant est validé au même MODEL_RE que le chemin admin
+  // (council-overrides) : un membre non conforme est rejeté, pas routé à l'aveugle
+  // (audit sécu — sinon des ids arbitraires partaient en sous-requêtes upstream).
+  const rawPanel = Array.isArray(c.panel) && c.panel.length ? c.panel : presetPanel
+  const panel = rawPanel.filter((m): m is string => typeof m === 'string' && MODEL_RE.test(m)).slice(0, MAX_PANEL)
   // Preset flash : chair rapide (chairFlash) s'il est configuré ; override de requête prime.
   const chair = c.chair || (preset === 'flash' && eff.chairFlash ? eff.chairFlash : eff.chair)
   const mode = c.mode === 'deliberate' ? 'deliberate' : 'fuse'

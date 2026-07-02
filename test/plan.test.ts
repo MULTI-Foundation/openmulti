@@ -175,3 +175,40 @@ test('computeQuote: modalities image -> unsupported_content', () => {
   assert.equal(r.quote, null)
   assert.equal(r.unavailable, 'unsupported_content')
 })
+
+// ── Audit sécu : n et max_completion_tokens ne doivent pas contourner la borne ──
+
+test('devis: n multiplie la borne de sortie (sinon sous-estimation d\'un facteur n)', async () => {
+  const j1 = await (await post({ model: 'auto', messages: MSGS, max_tokens: 1000 })).json()
+  const j3 = await (await post({ model: 'auto', messages: MSGS, max_tokens: 1000, n: 3 })).json()
+  assert.equal(j1.quote.output_tokens_max, 1000)
+  assert.equal(j3.quote.output_tokens_max, 3000)
+  // le coût max suit (l'entrée diffère un peu via le JSON, on vérifie la borne de sortie)
+  assert.ok(j3.quote.max_cost_usd > j1.quote.max_cost_usd)
+})
+
+test('devis: n invalide (0, negatif, non-entier) retombe a 1', async () => {
+  for (const n of [0, -5, 2.5, 'x']) {
+    const j = await (await post({ model: 'auto', messages: MSGS, max_tokens: 100, n })).json()
+    assert.equal(j.quote.output_tokens_max, 100, `n=${n}`)
+  }
+})
+
+test('devis: max_completion_tokens borne la sortie (ne peut pas contourner)', async () => {
+  // sans max_tokens : max_completion_tokens fournit la borne
+  let j = await (await post({ model: 'auto', messages: MSGS, max_completion_tokens: 500 })).json()
+  assert.equal(j.quote.output_tokens_max, 500)
+  // avec les deux : on prend le max (conservateur, borne haute sûre)
+  j = await (await post({ model: 'auto', messages: MSGS, max_tokens: 200, max_completion_tokens: 900 })).json()
+  assert.equal(j.quote.output_tokens_max, 900)
+})
+
+test('devis: plafond de tier ecrete aussi max_completion_tokens', async () => {
+  process.env.OPENMULTI_MAX_TOKENS_BALANCED = '400'
+  try {
+    const j = await (await post({ model: 'auto', messages: MSGS, max_completion_tokens: 9000 })).json()
+    assert.equal(j.quote.output_tokens_max, 400)
+  } finally {
+    delete process.env.OPENMULTI_MAX_TOKENS_BALANCED
+  }
+})
