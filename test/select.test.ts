@@ -9,14 +9,18 @@ import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 
 // Read at import time by select.ts/metrics.ts — set low so tests stay short.
+process.env.OPENROUTER_API_KEY ||= 'test-upstream-key' // metrics.ts importe catalog/pricing -> config
 process.env.OPENMULTI_SMART_MIN_SAMPLES = '2'
 process.env.OPENMULTI_SMART_MAX_ERROR_RATE = '0.2'
 process.env.OPENMULTI_SMART_DECAY_WINDOW = '0'
 
 const { selectModel } = await import('../src/select.ts')
-const { recordRequest, _resetMetrics } = await import('../src/metrics.ts')
+const { recordRequest, _resetMetrics, _setKnownModelsForTest } = await import('../src/metrics.ts')
 
-beforeEach(() => _resetMetrics())
+beforeEach(() => {
+  _resetMetrics()
+  _setKnownModelsForTest(['a/1', 'b/2']) // ids synthétiques déclarés connus (bornage cardinalité)
+})
 
 test('default: toujours le 1er candidat, quelles que soient les metriques', () => {
   recordRequest({ key: 'k', model: 'b/2', costUsd: 0.001 }) // b/2 moins cher mais ignore

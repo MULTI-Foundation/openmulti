@@ -37,9 +37,15 @@ export function buildUpstreamBody(
 
   // OM-01: clamp max_tokens to the tier ceiling when set (bounds unit cost). Applied
   // after the Kimi floor so a configured ceiling wins. Also caps an unset value.
+  // On borne AUSSI max_completion_tokens : sur l'API OpenAI moderne il prime sur
+  // max_tokens (déprécié) et est dans l'allowlist upstream — ne clamper que max_tokens
+  // laisserait un appelant franchir le plafond via ce champ (audit sécu 2026-07-02).
   if (maxTokensCeiling && maxTokensCeiling > 0) {
     const current = typeof body.max_tokens === 'number' ? body.max_tokens : Infinity
     if (current > maxTokensCeiling) body.max_tokens = maxTokensCeiling
+    if (typeof body.max_completion_tokens === 'number' && body.max_completion_tokens > maxTokensCeiling) {
+      body.max_completion_tokens = maxTokensCeiling
+    }
   }
 
   // Bias routing toward consistently fast providers, keep fallbacks on.

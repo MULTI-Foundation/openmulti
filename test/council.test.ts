@@ -68,6 +68,18 @@ test('resolveCouncil: preset par défaut + override de requête', () => {
   assert.equal(override.mode, 'deliberate')
 })
 
+test('resolveCouncil: le panel appelant est valide (MODEL_RE) — les ids poubelle sont filtres', () => {
+  // audit sécu : un membre non conforme ne doit pas partir en sous-requête à l'aveugle
+  const r = C.resolveCouncil({
+    messages: [],
+    openmulti: { council: { panel: ['ok/model', 'bad id with spaces', '../evil', 'x\r\ninject'] } },
+  } as any) as any
+  assert.deepEqual(r.panel, ['ok/model'])
+  // un panel entièrement invalide -> pas de panel -> erreur claire (pas de routage)
+  const empty = C.resolveCouncil({ messages: [], openmulti: { council: { panel: ['a b', '!!'] } } } as any) as any
+  assert.ok('error' in empty)
+})
+
 // ── Orchestration (forward injecté) ──────────────────────────────────────────
 
 function stub(opts: { failModels?: string[]; chairFails?: boolean } = {}) {

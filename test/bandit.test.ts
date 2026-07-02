@@ -9,14 +9,20 @@ import assert from 'node:assert/strict'
 
 // Lus à l'import par select.ts / metrics.ts — fenêtre courte pour des tests courts.
 // rho = 1 - 1/20 = 0.95 ; exploration en régime établi ~ MIN_SAMPLES/WINDOW = 10 %.
+process.env.OPENROUTER_API_KEY ||= 'test-upstream-key' // metrics.ts importe catalog/pricing -> config
 process.env.OPENMULTI_SMART_MIN_SAMPLES = '2'
 process.env.OPENMULTI_SMART_MAX_ERROR_RATE = '0.2'
 process.env.OPENMULTI_SMART_DECAY_WINDOW = '20'
 
 const { selectModel } = await import('../src/select.ts')
-const { recordRequest, modelAggregate, renderProm, _resetMetrics } = await import('../src/metrics.ts')
+const { recordRequest, modelAggregate, renderProm, _resetMetrics, _setKnownModelsForTest } = await import('../src/metrics.ts')
 
-beforeEach(() => _resetMetrics())
+beforeEach(() => {
+  _resetMetrics()
+  // Les ids synthétiques doivent être "connus" sinon le bornage de cardinalité les
+  // collapse sur 'other' (cf metrics-cardinality.test.ts).
+  _setKnownModelsForTest(['a/1', 'b/2'])
+})
 
 test('decay: la vue bandit s\'amortit, les compteurs Prometheus restent monotones', () => {
   recordRequest({ key: 'k', model: 'a/1', costUsd: 1 })
