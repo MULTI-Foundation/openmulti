@@ -24,7 +24,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { storeClient, storeHealthy, type StoreClient } from './store.js'
 import { config } from './config.js'
-import { createKey, listCaps } from './keys.js'
+import { createKey, listCaps, SIGNUP_PROJECT_PREFIX } from './keys.js'
 import { sendEmail } from './email.js'
 import { log } from './log.js'
 import { windowId } from './ratelimit.js'
@@ -200,7 +200,7 @@ export async function verifySignup(rawEmail: string, rawCode: string, ip: string
     let project = await c.get(projectKey)
     const isNewProject = !project
     if (!project) {
-      project = `ag-${randomBytes(5).toString('hex')}`
+      project = `${SIGNUP_PROJECT_PREFIX}${randomBytes(5).toString('hex')}`
       await c.set(projectKey, project)
     }
 

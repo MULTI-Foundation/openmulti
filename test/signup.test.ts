@@ -252,6 +252,67 @@ test('le code n\'est jamais stocké en clair ; l\'email jamais persisté', async
   assert.equal(dump.includes('secret@example.com'), false, 'email en clair dans le store')
 })
 
+// ── Posture B3 : prépayé anonyme (fail-closed), confiance (fail-open) ───────────
+
+const chatWith = (key: string) =>
+  app.fetch(new Request('http://test/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+  }))
+
+function mockUpstreamOk() {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ id: 'x', choices: [], usage: { cost: 0.001 } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch
+}
+
+test('B3 fail-closed : store down -> 503 pour un projet signup, 200 pour une clé de confiance', async (t) => {
+  process.env.OPENMULTI_API_KEYS = 'sk_trusted_static'
+  const { config } = await import('../src/config.ts')
+  const wasKeys = config.apiKeys
+  config.apiKeys.push('sk_trusted_static')
+  t.after(() => { config.apiKeys.length = 0; config.apiKeys.push(...wasKeys) })
+
+  const out = await fullSignup('posture@example.com')
+  mockUpstreamOk()
+  // store sain : les deux passent
+  assert.equal((await chatWith(out.key)).status, 200)
+  assert.equal((await chatWith('sk_trusted_static')).status, 200)
+  // store malade : l'anonyme est coupé (503), le client de confiance continue (fail-open)
+  _setStoreClientForTests(client, false)
+  const blocked = await chatWith(out.key)
+  assert.equal(blocked.status, 503)
+  assert.equal((await blocked.json()).error.type, 'service_unavailable')
+  assert.equal((await chatWith('sk_trusted_static')).status, 200)
+  // embeddings : même gate
+  const emb = await app.fetch(new Request('http://test/v1/embeddings', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${out.key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'auto', input: 'x' }),
+  }))
+  assert.equal(emb.status, 503)
+})
+
+test('B3 zéro-avance : REQUIRE_CREDITS=1 -> 402 sans crédits, 200 après top-up ; confiance intacte', async (t) => {
+  const { config } = await import('../src/config.ts')
+  ;(config.signup as { requireCredits: boolean }).requireCredits = true
+  t.after(() => { (config.signup as { requireCredits: boolean }).requireCredits = false })
+
+  const out = await fullSignup('prepaid@example.com')
+  mockUpstreamOk()
+  const refused = await chatWith(out.key)
+  assert.equal(refused.status, 402)
+  assert.equal((await refused.json()).error.type, 'insufficient_credits')
+
+  // top-up -> le compte s'ouvre (crédits posés + refresh du cache)
+  const { addCredits } = await import('../src/keys.ts')
+  assert.equal(typeof (await addCredits(out.project, 1, 'topup_1')), 'number')
+  assert.equal((await chatWith(out.key)).status, 200)
+})
+
 test('corps invalide ou champs manquants -> 400', async () => {
   assert.equal((await post('/signup', {})).status, 400)
   assert.equal((await post('/signup/verify', { email: 'x@example.com' })).status, 400)

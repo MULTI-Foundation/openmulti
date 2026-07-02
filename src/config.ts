@@ -111,6 +111,9 @@ export const config = {
     perDay: Math.max(1, Number(process.env.OPENMULTI_SIGNUP_PER_DAY ?? 50)),
     // Limite par IP (fenêtre fixe 60s), plus stricte que le rate limit du trafic.
     ratePerMin: Math.max(1, Number(process.env.OPENMULTI_SIGNUP_RATE_PER_MIN ?? 3)),
+    // Posture ZÉRO-AVANCE (B3) : un projet signup sans crédits posés reçoit 402 —
+    // désactive le free tier d'essai (par défaut : essai plafonné, risque accepté).
+    requireCredits: process.env.OPENMULTI_SIGNUP_REQUIRE_CREDITS === '1',
   },
   // Envoi d'email (vérification signup). 'log' = pas d'envoi, le code part dans les
   // logs (dev/staging) ; 'resend' = API Resend (RESEND_API_KEY requis).

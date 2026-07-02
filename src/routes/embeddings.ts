@@ -16,7 +16,7 @@ import { isRetryableStatus, backoff, pickAllowedFields, normalizedUpstreamError,
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate } from '../keys.js'
 import type { AppEnv } from '../types.js'
 
 export const embeddings = new Hono<AppEnv>()
@@ -24,6 +24,15 @@ export const embeddings = new Hono<AppEnv>()
 embeddings.post('/v1/embeddings', async (c) => {
   const startedAt = Date.now()
   const key = keyLabel(c.get('apiKey'))
+
+  // B3 : posture des projets signup (anonymes) — même gate que chat.ts.
+  const gate = signupGate(key)
+  if (gate.blocked) {
+    return c.json(
+      { error: { message: gate.message, type: gate.status === 402 ? 'insufficient_credits' : 'service_unavailable' } },
+      gate.status as 402 | 503,
+    )
+  }
 
   // Solde prépayé (console) : épuisé -> 402, le client doit re-créditer.
   const balance = checkBalance(key)

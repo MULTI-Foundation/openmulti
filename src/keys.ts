@@ -209,6 +209,38 @@ export function balanceReport(): Record<string, { creditsUsd: number; spentUsd: 
   return out
 }
 
+// ── Posture prépayé anonyme (projets signup, plan interprète B3) ────────────────
+
+/** Préfixe des projets nés du signup self-service (générés par signup.ts). C'est LE
+ * marqueur de la classe « anonyme » : personne d'autre ne crée de projets ag-*
+ * (PROJECT_RE l'autorise, mais /admin/keys est réservé à l'ops). */
+export const SIGNUP_PROJECT_PREFIX = 'ag-'
+
+export interface SignupGateVerdict {
+  blocked: boolean
+  status?: 402 | 503
+  message?: string
+}
+
+/** Posture B3 : les projets ANONYMES (signup) sont servis fail-closed, les clients à
+ * clé de confiance gardent le fail-open historique (une panne du store ne coupe
+ * jamais MyMULTI/console).
+ *  - Store absent/malade -> 503 : sans metering ni solde frais, on ne sert pas à
+ *    crédit un inconnu (le plafond journalier ne mord plus si la dépense n'est plus
+ *    comptée nulle part de façon durable).
+ *  - OPENMULTI_SIGNUP_REQUIRE_CREDITS=1 (posture zéro-avance) : sans crédits posés,
+ *    402 tant que pas de top-up — désactive le free tier d'essai sans redéployer. */
+export function signupGate(project: string): SignupGateVerdict {
+  if (!project.startsWith(SIGNUP_PROJECT_PREFIX)) return { blocked: false }
+  if (!storeClient() || !storeHealthy()) {
+    return { blocked: true, status: 503, message: 'Self-service accounts are temporarily unavailable — retry shortly' }
+  }
+  if (config.signup.requireCredits && !credits.has(project)) {
+    return { blocked: true, status: 402, message: 'This account is prepaid-only — top up credits before use' }
+  }
+  return { blocked: false }
+}
+
 /** Secondes jusqu'à minuit UTC — le Retry-After d'un plafond journalier atteint. */
 export function secondsToUtcMidnight(now = new Date()): number {
   const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
