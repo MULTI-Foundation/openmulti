@@ -81,21 +81,29 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
-      - name: Configure kubeconfig (scoped SA, openmulti-staging only)
-        # Le secret passe par env: et non interpolé inline dans le script (audit sécu M3 :
-        # une interpolation ${{ secrets }} dans le corps du run est exposée via set -x / ps).
+      # Déploiement staging via SSH forced-command, comme la prod : le serveur staging
+      # (cluster k3s dédié) porte le même wrapper deploy-openmulti.sh qui n'autorise que
+      # `set image` sur les déploiements openmulti connus, avec une image ghcr openmulti.
+      # Remplace l'ancien kubectl direct sur :6443 (API désormais fermable au firewall).
+      # Réutilise la clé CI de déploiement (PROD_SSH_KEY, autorisée sur les deux serveurs) ;
+      # seul l'hôte diffère (STAGING_SSH_HOST).
+      - name: Roll out new image (SSH forced-command)
         env:
-          KUBECONFIG_B64: ${{ secrets.STAGING_KUBECONFIG }}
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          HOST: ${{ secrets.STAGING_SSH_HOST }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
         run: |
-          mkdir -p ~/.kube
-          printf '%s' "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-      - name: Roll out new image
-        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::STAGING_SSH_KNOWN_HOSTS absent — host key en TOFU (ssh-keyscan)."
+            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
           IMG=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${GITHUB_SHA}
-          kubectl -n openmulti-staging set image deployment/openmulti openmulti=$IMG
-          kubectl -n openmulti-staging rollout status deployment/openmulti --timeout=180s
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/deploy root@"$HOST" "openmulti-staging openmulti $IMG"
 
   deploy-prod:
     name: Deploy to prod (k3s openmulti-prod, sur tag v*)
