@@ -6,6 +6,7 @@ import { auth, metricsAuth, adminAuth } from './auth.js'
 import { rateLimit } from './ratelimit.js'
 import { chat } from './routes/chat.js'
 import { models } from './routes/models.js'
+import { plan } from './routes/plan.js'
 import { council } from './routes/council.js'
 import { embeddings } from './routes/embeddings.js'
 import { admin } from './routes/admin.js'
@@ -41,6 +42,7 @@ app.use('/v1/*', auth)
 app.use('/v1/*', rateLimit)
 app.route('/', chat)
 app.route('/', models)
+app.route('/', plan)
 app.route('/', council)
 app.route('/', embeddings)
 
