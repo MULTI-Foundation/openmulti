@@ -88,6 +88,22 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'anthropic/claude-opus-4-6': { inputPerMTok: 5, outputPerMTok: 25 },
   'anthropic/claude-sonnet-4-6': { inputPerMTok: 3, outputPerMTok: 15 },
   'anthropic/claude-haiku-4-5': { inputPerMTok: 1, outputPerMTok: 5 },
+
+  // Trous découverts au smoke du 2026-07-02 : modèles du catalogue d'exploitation sans
+  // entrée ici — sur un chemin DIRECT le coût n'est pas synthétisé et le bandit croit
+  // le modèle gratuit (donc le sur-exploite). Prix vérifiés le 2026-07-02 via l'API
+  // publique OpenRouter (/api/v1/models ; cohérente avec les entrées vendeur déjà
+  // vérifiées : opus 5/25, sonnet 3/15). Anthropic en DEUX graphies : OpenRouter
+  // utilise le point (claude-sonnet-4.5), l'API Anthropic directe le tiret — le
+  // catalogue d'exploitation a mélangé les deux, la table couvre les deux.
+  'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
+  'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
+  'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
+  'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25 },
+  'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5 },
+  'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
+  'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
+  'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
 }
 
 export interface PricingParse {
