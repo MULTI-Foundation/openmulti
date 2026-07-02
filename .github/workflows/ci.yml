@@ -72,17 +72,20 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/setup-kubectl@v4
-      - name: Configure kubeconfig (scoped SA, openmulti-staging only)
+      # Même mécanique que deploy-prod (audit #2/#3) : l'API k3s :6443 n'est plus
+      # exposée publiquement, l'ancien chemin kubectl direct (STAGING_KUBECONFIG) est
+      # mort depuis ce durcissement. La forced-command serveur n'autorise que
+      # `set image` sur les déploiements openmulti connus.
+      - name: Roll out new image (SSH forced-command)
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          HOST: ${{ secrets.PROD_SSH_HOST }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-      - name: Roll out new image
-        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
           IMG=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${GITHUB_SHA}
-          kubectl -n openmulti-staging set image deployment/openmulti openmulti=$IMG
-          kubectl -n openmulti-staging rollout status deployment/openmulti --timeout=180s
+          ssh -i ~/.ssh/deploy root@"$HOST" "openmulti-staging openmulti $IMG"
 
   deploy-prod:
     name: Deploy to prod (k3s openmulti-prod, sur tag v*)
