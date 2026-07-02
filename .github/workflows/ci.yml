@@ -6,20 +6,29 @@ on:
     tags: ['v*']
   pull_request:
 
+# Least-privilege par défaut (audit sécu H2) : le job `test` tourne sur pull_request et
+# exécute `npm ci` (scripts de lifecycle) — sans ceci, GITHUB_TOKEN prend les droits par
+# défaut du repo (souvent write). build-push relève ses propres droits ci-dessous.
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   IMAGE: ${{ github.repository }}
-  # Les actions (checkout@v4, docker/*, azure/setup-kubectl@v4) tournent encore sur Node 20,
-  # forcees en Node 24 le 2026-06-16. On opte maintenant pour valider la compat en avance.
+  # Les actions tournaient sur Node 20, forcees en Node 24 le 2026-06-16 : on valide en avance.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Toutes les actions tierces sont EPINGLEES PAR COMMIT SHA (audit sécu H1) : un tag
+# mutable repointe (compromission d'un mainteneur d'action) exécuterait du code arbitraire
+# dans des jobs qui voient GITHUB_TOKEN / les creds de deploy / le jeton OIDC cosign. Le
+# tag lisible est en commentaire. Bumper = via Dependabot/Renovate.
 jobs:
   test:
     name: Typecheck + contract test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -37,22 +46,22 @@ jobs:
       packages: write
       id-token: write   # OM-09 : signature cosign keyless (OIDC GitHub)
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
           tags: |
             type=sha,format=long,prefix=,suffix=
             type=raw,value=latest
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
@@ -60,7 +69,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Sign image (keyless, par digest)
         run: |
           IMG=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE }}" | tr '[:upper:]' '[:lower:]')
@@ -72,11 +81,15 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
       - name: Configure kubeconfig (scoped SA, openmulti-staging only)
+        # Le secret passe par env: et non interpolé inline dans le script (audit sécu M3 :
+        # une interpolation ${{ secrets }} dans le corps du run est exposée via set -x / ps).
+        env:
+          KUBECONFIG_B64: ${{ secrets.STAGING_KUBECONFIG }}
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
       - name: Roll out new image
         run: |
@@ -96,9 +109,18 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           HOST: ${{ secrets.PROD_SSH_HOST }}
+          # Empreinte du host key, pinnée via secret (audit sécu M4). Si le secret est
+          # absent, on retombe sur ssh-keyscan (TOFU) — à renseigner pour fermer le MITM.
+          KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::PROD_SSH_KNOWN_HOSTS absent — host key en TOFU (ssh-keyscan). Pinner ce secret pour fermer le MITM."
+            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
           IMG=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${GITHUB_SHA}
-          ssh -i ~/.ssh/deploy root@"$HOST" "openmulti-prod openmulti $IMG"
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/deploy root@"$HOST" "openmulti-prod openmulti $IMG"
