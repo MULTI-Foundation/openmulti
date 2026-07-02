@@ -66,6 +66,12 @@ test('le prix n\'est expose que s\'il est verifie dans la table de synthese', as
     output_per_mtok_usd: 4,
     source: 'direct',
   })
-  // sonnet n'a pas de chemin direct tarife -> pas de prix affiche (pas de mensonge)
-  assert.equal(byId.get('anthropic/claude-sonnet-4-5').openmulti.pricing, null)
+  // sonnet-4-5 est tarife depuis le comblement des trous du 2026-07-02
+  assert.deepEqual(byId.get('anthropic/claude-sonnet-4-5').openmulti.pricing, {
+    input_per_mtok_usd: 3,
+    output_per_mtok_usd: 15,
+    source: 'direct',
+  })
+  // un modele HORS table (image) -> pas de prix affiche (pas de mensonge)
+  assert.equal(byId.get('google/gemini-2.5-flash-image').openmulti.pricing, null)
 })

@@ -54,3 +54,23 @@ test('computeCostUsd: modele non tarife -> undefined, jamais un faux zero', () =
   assert.equal(computeCostUsd('unknown/model', 100_000, 10_000), undefined)
   assert.equal(priceFor('unknown/model'), undefined)
 })
+
+test('les modeles du catalogue d\'exploitation sont tarifes (regression smoke 2026-07-02)', () => {
+  // Un modele de catalogue sans prix, sur un chemin direct, est metered sans cout :
+  // le bandit le croit gratuit et le sur-exploite. Verrouille les entrees ajoutees
+  // (prix verifies API OpenRouter 2026-07-02) + la double graphie anthropic
+  // (point cote OpenRouter, tiret cote API directe).
+  const expected: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
+    'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
+    'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
+    'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
+    'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25 },
+    'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5 },
+    'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
+    'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
+    'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
+  }
+  for (const [model, price] of Object.entries(expected)) {
+    assert.deepEqual(priceFor(model), price, `prix manquant/different pour ${model}`)
+  }
+})
