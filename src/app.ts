@@ -11,6 +11,7 @@ import { council } from './routes/council.js'
 import { embeddings } from './routes/embeddings.js'
 import { admin } from './routes/admin.js'
 import { signup } from './routes/signup.js'
+import { account } from './routes/account.js'
 import { renderProm } from './metrics.js'
 import { config } from './config.js'
 import type { AppEnv } from './types.js'
@@ -43,6 +44,7 @@ app.use('/v1/*', auth)
 app.use('/v1/*', rateLimit)
 app.route('/', chat)
 app.route('/', models)
+app.route('/', account)
 app.route('/', plan)
 app.route('/', council)
 app.route('/', embeddings)

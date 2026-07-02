@@ -13,7 +13,7 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import { runCouncil } from '../council.js'
@@ -28,10 +28,12 @@ chat.post('/v1/chat/completions', async (c) => {
   // B3 : posture des projets signup (anonymes) — fail-closed si le store est down
   // (503), 402 sans crédits en mode zéro-avance. Les clients à clé de confiance ne
   // passent jamais par cette gate (fail-open historique préservé).
+  const topup = topupUrlFor(key)
+  const topupHint = topup ? ` Top up: ${topup}` : ''
   const gate = signupGate(key)
   if (gate.blocked) {
     return c.json(
-      { error: { message: gate.message, type: gate.status === 402 ? 'insufficient_credits' : 'service_unavailable' } },
+      { error: { message: gate.status === 402 ? `${gate.message}.${topupHint}` : gate.message, type: gate.status === 402 ? 'insufficient_credits' : 'service_unavailable' } },
       gate.status as 402 | 503,
     )
   }
@@ -42,7 +44,7 @@ chat.post('/v1/chat/completions', async (c) => {
   const balance = checkBalance(key)
   if (balance.blocked) {
     return c.json(
-      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account`, type: 'insufficient_credits' } },
+      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account.${topupHint}`, type: 'insufficient_credits' } },
       402,
     )
   }
