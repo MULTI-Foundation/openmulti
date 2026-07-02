@@ -200,6 +200,41 @@ export async function addCredits(project: string, usd: number, ref: string): Pro
   return credits.get(project) ?? usd
 }
 
+/** URL de recharge pour un projet (template OPENMULTI_TOPUP_URL), ou undefined. */
+export function topupUrlFor(project: string): string | undefined {
+  if (!config.topupUrl) return undefined
+  return config.topupUrl.replaceAll('{project}', encodeURIComponent(project))
+}
+
+export interface ProjectAccount {
+  /** Le projet a un solde prépayé posé (sinon : facturation de confiance, pas de solde). */
+  prepaid: boolean
+  creditsUsd?: number
+  spentUsd?: number
+  balanceUsd?: number
+  capUsdPerDay?: number
+  spentTodayUsd?: number
+}
+
+/** Vue compte d'UN projet, depuis les caches mémoire (zéro I/O — même source que les
+ * gardes du chemin chaud, donc l'agent voit exactement ce qui l'autorise/le bloque). */
+export function projectAccount(project: string): ProjectAccount {
+  const total = credits.get(project)
+  const cap = caps.get(project)
+  const out: ProjectAccount = { prepaid: total !== undefined }
+  if (total !== undefined) {
+    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0)
+    out.creditsUsd = total
+    out.spentUsd = spent
+    out.balanceUsd = total - spent
+  }
+  if (cap !== undefined) {
+    out.capUsdPerDay = cap
+    out.spentTodayUsd = meterDay() === spendDay ? (spendToday.get(project) ?? 0) : 0
+  }
+  return out
+}
+
 export function balanceReport(): Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> {
   const out: Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> = {}
   for (const [project, total] of credits) {

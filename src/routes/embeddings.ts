@@ -16,7 +16,7 @@ import { isRetryableStatus, backoff, pickAllowedFields, normalizedUpstreamError,
 import { log } from '../log.js'
 import { recordRequest, recordRetry, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor } from '../keys.js'
 import type { AppEnv } from '../types.js'
 
 export const embeddings = new Hono<AppEnv>()
@@ -26,10 +26,12 @@ embeddings.post('/v1/embeddings', async (c) => {
   const key = keyLabel(c.get('apiKey'))
 
   // B3 : posture des projets signup (anonymes) — même gate que chat.ts.
+  const topup = topupUrlFor(key)
+  const topupHint = topup ? ` Top up: ${topup}` : ''
   const gate = signupGate(key)
   if (gate.blocked) {
     return c.json(
-      { error: { message: gate.message, type: gate.status === 402 ? 'insufficient_credits' : 'service_unavailable' } },
+      { error: { message: gate.status === 402 ? `${gate.message}.${topupHint}` : gate.message, type: gate.status === 402 ? 'insufficient_credits' : 'service_unavailable' } },
       gate.status as 402 | 503,
     )
   }
@@ -38,7 +40,7 @@ embeddings.post('/v1/embeddings', async (c) => {
   const balance = checkBalance(key)
   if (balance.blocked) {
     return c.json(
-      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account`, type: 'insufficient_credits' } },
+      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account.${topupHint}`, type: 'insufficient_credits' } },
       402,
     )
   }

@@ -115,6 +115,10 @@ export const config = {
     // désactive le free tier d'essai (par défaut : essai plafonné, risque accepté).
     requireCredits: process.env.OPENMULTI_SIGNUP_REQUIRE_CREDITS === '1',
   },
+  // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
+  // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que
+  // l'agent puisse tendre un lien de paiement à son humain. Vide = pas d'URL.
+  topupUrl: process.env.OPENMULTI_TOPUP_URL || '',
   // Envoi d'email (vérification signup). 'log' = pas d'envoi, le code part dans les
   // logs (dev/staging) ; 'resend' = API Resend (RESEND_API_KEY requis).
   email: {
