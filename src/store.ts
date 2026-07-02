@@ -22,6 +22,9 @@ export interface StoreClient {
   get?(key: string): Promise<string | null>
   set?(key: string, value: string, opts?: { EX?: number }): Promise<unknown>
   del?(key: string): Promise<unknown>
+  // Scripts Lua (mutations multi-clés atomiques, cf addCredits). Optionnelle : un
+  // client sans eval retombe sur le chemin historique en deux temps.
+  eval?(script: string, opts: { keys: string[]; arguments: string[] }): Promise<unknown>
 }
 
 let client: StoreClient | null = null
