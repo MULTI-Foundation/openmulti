@@ -94,13 +94,27 @@ export function usdToAtomic(usd: number): string {
 export interface X402Network {
   network: string // ex. 'base' | 'base-sepolia'
   usdcContract: string // adresse du contrat USDC sur ce réseau
+  /** Domaine EIP-712 du contrat (name/version) : le wallet du payeur construit sa
+   * signature avec — REQUIS dans extra, sinon le client/facilitateur rejette
+   * (invalid_exact_evm_missing_eip712_domain, vu au test réel du 2026-07-03). */
+  eip712: { name: string; version: string }
 }
 
-// Contrats USDC officiels (Circle). Notés le 2026-07-02 ; à REVÉRIFIER sur
-// developers.circle.com au moment de l'activation prod (config env prioritaire).
+// Contrats USDC officiels (Circle). Adresses notées le 2026-07-02 ; domaines EIP-712
+// lus ON-CHAIN le 2026-07-03 (eth_call name()/version() — ATTENTION ils diffèrent :
+// 'USDC' sur Sepolia, 'USD Coin' sur mainnet). À REVÉRIFIER à l'activation prod
+// (config env prioritaire pour l'adresse).
 export const KNOWN_NETWORKS: Record<string, X402Network> = {
-  base: { network: 'base', usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
-  'base-sepolia': { network: 'base-sepolia', usdcContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' },
+  base: {
+    network: 'base',
+    usdcContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    eip712: { name: 'USD Coin', version: '2' },
+  },
+  'base-sepolia': {
+    network: 'base-sepolia',
+    usdcContract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    eip712: { name: 'USDC', version: '2' },
+  },
 }
 
 export interface PaymentRequirementsInput {
@@ -130,9 +144,10 @@ export function paymentRequired(input: PaymentRequirementsInput): Record<string,
         payTo: input.payTo,
         maxTimeoutSeconds: input.maxTimeoutSeconds ?? 300,
         asset: input.network.usdcContract,
-        // le devis lié voyage dans extra : le client le renvoie avec son paiement,
-        // le serveur revérifie hash/montant/TTL avant d'exécuter (S1).
-        extra: { quoteToken: input.quoteToken },
+        // extra porte : le domaine EIP-712 de l'asset (REQUIS — le wallet signe avec,
+        // le facilitateur vérifie avec) + notre devis lié (le client peut le renvoyer
+        // en X-OPENMULTI-QUOTE ; le serveur revérifie hash/montant/TTL avant d'exécuter, S1).
+        extra: { ...input.network.eip712, quoteToken: input.quoteToken },
       },
     ],
   }

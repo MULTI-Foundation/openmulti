@@ -74,6 +74,12 @@ test('paymentRequired : forme x402 v1, montant atomique, devis dans extra', () =
   assert.equal(a.maxAmountRequired, '250000')
   assert.equal(a.asset, KNOWN_NETWORKS['base']!.usdcContract)
   assert.equal((a.extra as Record<string, unknown>).quoteToken, 'jeton.mac')
+  // Le domaine EIP-712 de l'asset est REQUIS dans extra : sans lui le wallet ne peut
+  // pas signer et le facilitateur rejette (invalid_exact_evm_missing_eip712_domain,
+  // constaté au test réel du 2026-07-03). Les noms DIFFÈRENT entre réseaux.
+  assert.equal((a.extra as Record<string, unknown>).name, 'USD Coin')
+  assert.equal((a.extra as Record<string, unknown>).version, '2')
+  assert.equal(KNOWN_NETWORKS['base-sepolia']!.eip712.name, 'USDC')
 })
 
 // ── Anti-rejeu ────────────────────────────────────────────────────────────────────

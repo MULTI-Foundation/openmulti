@@ -59,11 +59,15 @@ export function _setFacilitatorForTest(f: Facilitator | null): void {
 
 // ── Aides ──────────────────────────────────────────────────────────────────────────
 
-function network(): X402Network {
+function network(): X402Network | null {
   const known = KNOWN_NETWORKS[config.x402.network]
+  // Le domaine EIP-712 vient de la table code (lu on-chain, cf x402.ts) : un réseau
+  // inconnu n'est pas devinable — config cassée, la gate répondra 503.
+  if (!known) return null
   return {
     network: config.x402.network,
-    usdcContract: config.x402.usdcContract || known?.usdcContract || '',
+    usdcContract: config.x402.usdcContract || known.usdcContract,
+    eip712: known.eip712,
   }
 }
 
@@ -151,7 +155,7 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   const requestHash = sha256hex(raw)
   const net = network()
-  if (!net.usdcContract) {
+  if (!net || !net.usdcContract) {
     log.error('x402_network_unconfigured', { network: config.x402.network })
     return c.json(err('x402 network not configured', 'service_unavailable'), 503)
   }
