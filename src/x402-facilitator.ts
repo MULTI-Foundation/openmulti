@@ -93,6 +93,10 @@ export interface HttpFacilitatorConfig {
   baseUrl: string // ex. https://x402.org/facilitator (testnet) ou le facilitateur CDP
   /** En-têtes d'auth (le facilitateur CDP mainnet exige une clé API CDP). */
   authHeaders?: Record<string, string>
+  /** En-têtes d'auth calculés PAR opération et À CHAQUE appel (ex. CDP : JWT signé, à
+   * durée de vie courte, scopé au chemin /verify vs /settle). Fusionnés par-dessus
+   * `authHeaders`. Une exception ici = appel en échec = fail-closed (try/catch de `call`). */
+  authHeadersFor?: (op: 'verify' | 'settle') => Promise<Record<string, string>>
   transport?: FacilitatorTransport
   /** Timeout du /verify (lecture). Défaut 20s. */
   verifyTimeoutMs?: number
@@ -110,9 +114,11 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
   const verifyTimeout = cfg.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
   const settleTimeout = cfg.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS
 
-  async function call(path: string, payload: PaymentPayload, requirements: PaymentRequirements, timeoutMs: number): Promise<Record<string, unknown> | null> {
+  async function call(op: 'verify' | 'settle', payload: PaymentPayload, requirements: PaymentRequirements, timeoutMs: number): Promise<Record<string, unknown> | null> {
+    const path = `/${op}`
     try {
-      const { status, data } = await transport(`${base}${path}`, { x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }, headers, timeoutMs)
+      const h = cfg.authHeadersFor ? { ...headers, ...(await cfg.authHeadersFor(op)) } : headers
+      const { status, data } = await transport(`${base}${path}`, { x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }, h, timeoutMs)
       if (status !== 200 || typeof data !== 'object' || data === null) {
         log.warn('x402_facilitator_bad_response', { path, status })
         return null
@@ -127,7 +133,7 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
   return {
     name: 'http',
     async verify(payload, requirements) {
-      const data = await call('/verify', payload, requirements, verifyTimeout)
+      const data = await call('verify', payload, requirements, verifyTimeout)
       if (!data || typeof data.isValid !== 'boolean') return { isValid: false, invalidReason: 'facilitator_unavailable' }
       return {
         isValid: data.isValid,
@@ -136,7 +142,7 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
       }
     },
     async settle(payload, requirements) {
-      const data = await call('/settle', payload, requirements, settleTimeout)
+      const data = await call('settle', payload, requirements, settleTimeout)
       if (!data || typeof data.success !== 'boolean') return { success: false, errorReason: 'facilitator_unavailable' }
       return {
         success: data.success,

@@ -139,6 +139,11 @@ export const config = {
     // (lent sur mainnet, cf 1er paiement mainnet). Réglables si un facilitateur traîne.
     verifyTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_X402_VERIFY_TIMEOUT_MS ?? 20000)),
     settleTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_X402_SETTLE_TIMEOUT_MS ?? 60000)),
+    // Coinbase CDP comme facilitateur PRIMAIRE (règlement Base à gas sponsorisé) quand
+    // les deux creds sont présents. Sinon on retombe sur facilitatorUrl. Les auditeurs
+    // (verifyUrls, ex. notre Mogami) restent en double vérification par-dessus.
+    cdpApiKeyId: process.env.CDP_API_KEY_ID || '',
+    cdpApiKeySecret: process.env.CDP_API_KEY_SECRET || '',
   },
   // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
   // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que

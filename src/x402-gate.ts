@@ -34,6 +34,7 @@ import {
   type X402Network,
 } from './x402.js'
 import { crossVerifyFacilitator, httpFacilitator, type Facilitator } from './x402-facilitator.js'
+import { cdpFacilitator } from './x402-cdp.js'
 import type { AppEnv, ChatRequest } from './types.js'
 
 export const WALLET_PROJECT_PREFIX = 'xw-'
@@ -45,12 +46,20 @@ let facilitator: Facilitator | null = null
 
 function activeFacilitator(): Facilitator {
   if (!facilitator) {
-    const primary = httpFacilitator({
-      baseUrl: config.x402.facilitatorUrl,
-      ...(config.x402.facilitatorToken ? { authHeaders: { Authorization: `Bearer ${config.x402.facilitatorToken}` } } : {}),
-      verifyTimeoutMs: config.x402.verifyTimeoutMs,
-      settleTimeoutMs: config.x402.settleTimeoutMs,
-    })
+    // Primaire = CDP (règlement Base à gas sponsorisé) dès que les creds sont présents ;
+    // sinon facilitatorUrl générique (testnet public, etc.).
+    const useCdp = config.x402.cdpApiKeyId && config.x402.cdpApiKeySecret
+    const primary = useCdp
+      ? cdpFacilitator(config.x402.cdpApiKeyId, config.x402.cdpApiKeySecret, {
+          verifyTimeoutMs: config.x402.verifyTimeoutMs,
+          settleTimeoutMs: config.x402.settleTimeoutMs,
+        })
+      : httpFacilitator({
+          baseUrl: config.x402.facilitatorUrl,
+          ...(config.x402.facilitatorToken ? { authHeaders: { Authorization: `Bearer ${config.x402.facilitatorToken}` } } : {}),
+          verifyTimeoutMs: config.x402.verifyTimeoutMs,
+          settleTimeoutMs: config.x402.settleTimeoutMs,
+        })
     // Double vérification : chaque URL d'audit doit AUSSI valider (settle = primaire).
     // Les auditeurs ne font que /verify : seul le timeout de verify les concerne.
     const auditors = config.x402.verifyUrls.map((baseUrl) => httpFacilitator({ baseUrl, verifyTimeoutMs: config.x402.verifyTimeoutMs }))

@@ -153,6 +153,52 @@ test('facilitateur http : timeouts distincts verify (court) vs settle (long, mai
   assert.deepEqual(seen, [{ path: 'verify', timeoutMs: 5_000 }, { path: 'settle', timeoutMs: 90_000 }])
 })
 
+test('facilitateur http : authHeadersFor calculé PAR opération et fusionné à chaque appel', async () => {
+  const seen: { path: string; auth?: string; base?: string }[] = []
+  let calls = 0
+  const f = httpFacilitator({
+    baseUrl: 'https://f.test',
+    authHeaders: { 'X-Base': 'static' },
+    authHeadersFor: async (op) => {
+      calls++
+      return { Authorization: `jwt-${op}-${calls}` } // frais à chaque appel (JWT court)
+    },
+    transport: async (url, _b, headers) => {
+      seen.push({ path: url.endsWith('/verify') ? 'verify' : 'settle', auth: headers.Authorization, base: headers['X-Base'] })
+      return url.endsWith('/verify') ? { status: 200, data: { isValid: true } } : { status: 200, data: { success: true } }
+    },
+  })
+  await f.verify({}, {})
+  await f.settle({}, {})
+  // en-tête statique conservé + auth scopée par op + recalculée (compteur croît)
+  assert.deepEqual(seen, [
+    { path: 'verify', auth: 'jwt-verify-1', base: 'static' },
+    { path: 'settle', auth: 'jwt-settle-2', base: 'static' },
+  ])
+})
+
+test('facilitateur CDP : verify/settle vers l\'URL CDP avec l\'auth de la bonne opération', async () => {
+  const { cdpFacilitator } = await import('../src/x402-cdp.ts')
+  const seen: { url: string; auth?: string }[] = []
+  const f = cdpFacilitator('key-id', 'key-secret', {}, {
+    // pas de SDK ni de réseau : provider + transport injectés
+    authHeadersProvider: async () => ({
+      verify: { Authorization: 'cdp-verify-jwt' },
+      settle: { Authorization: 'cdp-settle-jwt' },
+    }),
+    transport: async (url, _b, headers) => {
+      seen.push({ url, auth: headers.Authorization })
+      return url.endsWith('/verify') ? { status: 200, data: { isValid: true, payer: '0xP' } } : { status: 200, data: { success: true, transaction: '0xT' } }
+    },
+  })
+  assert.equal((await f.verify({}, {})).isValid, true)
+  assert.equal((await f.settle({}, {})).success, true)
+  assert.deepEqual(seen, [
+    { url: 'https://api.cdp.coinbase.com/platform/v2/x402/verify', auth: 'cdp-verify-jwt' },
+    { url: 'https://api.cdp.coinbase.com/platform/v2/x402/settle', auth: 'cdp-settle-jwt' },
+  ])
+})
+
 test('facilitateur http : statut != 200, corps difforme ou exception = INVALIDE (fail-closed)', async () => {
   const bad = (data: { status: number; data: unknown } | Error) =>
     httpFacilitator({ baseUrl: 'https://f.test', transport: async () => { if (data instanceof Error) throw data; return data } })
