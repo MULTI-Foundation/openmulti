@@ -115,6 +115,23 @@ export const config = {
     // désactive le free tier d'essai (par défaut : essai plafonné, risque accepté).
     requireCredits: process.env.OPENMULTI_SIGNUP_REQUIRE_CREDITS === '1',
   },
+  // B4 : rail x402 (paiement USDC par requête, agents anonymes à wallet). OPT-IN
+  // strict — sans OPENMULTI_X402=1 rien ne change (la gate est un passe-plat).
+  // Testnet d'abord (base-sepolia + facilitateur public) ; mainnet = payTo (le Safe
+  // multisig), network=base, facilitateur CDP + sa clé. Voir src/x402*.ts.
+  x402: {
+    enabled: process.env.OPENMULTI_X402 === '1',
+    payTo: process.env.OPENMULTI_X402_PAY_TO || '',
+    network: process.env.OPENMULTI_X402_NETWORK || 'base-sepolia',
+    // Contrat USDC : surcharge env prioritaire sur la table code (KNOWN_NETWORKS).
+    usdcContract: process.env.OPENMULTI_X402_USDC || '',
+    facilitatorUrl: process.env.OPENMULTI_X402_FACILITATOR_URL || 'https://x402.org/facilitator',
+    // Auth du facilitateur (CDP mainnet l'exige) — posée en Authorization: Bearer.
+    facilitatorToken: process.env.OPENMULTI_X402_FACILITATOR_TOKEN || '',
+    // Secret HMAC du devis lié (S1). REQUIS quand x402 est activé (check au boot).
+    quoteSecret: process.env.OPENMULTI_X402_QUOTE_SECRET || '',
+    quoteTtlS: Math.max(30, Number(process.env.OPENMULTI_X402_QUOTE_TTL_S ?? 300)),
+  },
   // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
   // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que
   // l'agent puisse tendre un lien de paiement à son humain. Vide = pas d'URL.
@@ -138,6 +155,12 @@ export const config = {
 // Refuse to boot rather than start silently open.
 if (process.env.NODE_ENV === 'production' && config.apiKeys.length === 0) {
   throw new Error('OPENMULTI_API_KEYS is required in production (refusing to start open)')
+}
+
+// x402 activé sans adresse de réception ou sans secret de devis = config cassée sur un
+// chemin d'ARGENT : refus au boot (jamais un HMAC sur '' ni un payTo vide).
+if (config.x402.enabled && (!config.x402.payTo || !config.x402.quoteSecret)) {
+  throw new Error('OPENMULTI_X402=1 requires OPENMULTI_X402_PAY_TO and OPENMULTI_X402_QUOTE_SECRET')
 }
 
 // Timeouts (ms). Ported 1:1 from MyMULTI's proxy so v0 is iso-comportement.

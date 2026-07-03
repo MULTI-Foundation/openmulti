@@ -16,6 +16,11 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
+  // B4 : une requête déjà authentifiée EN AMONT (gate x402 : paiement encaissé, projet
+  // wallet posé dans le contexte) ne repasse pas par la clé. Seule la gate écrit cette
+  // valeur avant auth ; sans x402 activé, ce chemin est mort.
+  if (c.get('apiKey')) return next()
+
   const header = c.req.header('authorization')
   if (!header?.startsWith('Bearer ')) {
     return c.json({ error: { message: 'Missing authorization', type: 'auth_error' } }, 401)

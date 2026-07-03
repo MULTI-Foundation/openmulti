@@ -161,3 +161,15 @@ export async function claimNonce(nonce: string): Promise<ReplayVerdict> {
   }
   return 'replayed'
 }
+
+/** Libère un nonce réclamé quand le règlement a ÉCHOUÉ (le client doit pouvoir
+ * retenter avec le même paiement — l'argent n'a pas bougé). Best-effort. */
+export async function releaseNonce(nonce: string): Promise<void> {
+  const c = storeClient()
+  if (!c || !c.del) return
+  try {
+    await c.del(`${NONCE_PREFIX}${nonce}`)
+  } catch {
+    // best-effort : au pire le client attend l'expiration du TTL
+  }
+}
