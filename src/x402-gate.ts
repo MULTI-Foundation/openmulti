@@ -69,6 +69,16 @@ function network(): X402Network {
 
 const sha256hex = (text: string) => createHash('sha256').update(text).digest('hex')
 
+/** Origin publique de la requête : derrière l'ingress, le pod voit http — on honore
+ * X-Forwarded-Proto (posé par traefik) pour que `resource` reflète l'URL réelle
+ * (un client x402 strict peut la comparer à celle qu'il a appelée). */
+function publicOrigin(c: { req: { url: string; header: (n: string) => string | undefined } }): string {
+  const url = new URL(c.req.url)
+  const proto = c.req.header('x-forwarded-proto')
+  if (proto === 'https' || proto === 'http') url.protocol = `${proto}:`
+  return url.origin
+}
+
 /** Projet wallet : identité stable dérivée de l'adresse payeuse (jamais l'adresse en
  * clair dans les labels de métriques/metering — même règle que l'email du signup). */
 export function walletProject(payer: string): string {
@@ -167,7 +177,7 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
         maxUsd,
         payTo: config.x402.payTo,
         network: net,
-        resource: new URL(c.req.url).origin + PAID_SURFACE,
+        resource: publicOrigin(c) + PAID_SURFACE,
         description: 'OpenMulti chat completion (max quote, overpay credited to your wallet balance)',
         quoteToken: token,
         maxTimeoutSeconds: config.x402.quoteTtlS,
@@ -213,7 +223,7 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
     maxUsd: requiredUsd,
     payTo: config.x402.payTo,
     network: net,
-    resource: new URL(c.req.url).origin + PAID_SURFACE,
+    resource: publicOrigin(c) + PAID_SURFACE,
     description: 'OpenMulti chat completion (max quote, overpay credited to your wallet balance)',
     quoteToken: quoteHeader ?? '',
     maxTimeoutSeconds: config.x402.quoteTtlS,

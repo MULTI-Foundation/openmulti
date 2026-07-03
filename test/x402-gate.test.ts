@@ -253,3 +253,12 @@ test('walletProject : stable, insensible à la casse, jamais l\'adresse en clair
   assert.match(p, /^xw-[0-9a-f]{10}$/)
   assert.equal(p.includes('abcd'), false)
 })
+
+test('resource honore X-Forwarded-Proto (TLS terminé au proxy)', async () => {
+  const res = await post({ 'x-forwarded-proto': 'https' })
+  const j = await res.json()
+  assert.equal(j.accepts[0].resource, 'https://test/v1/chat/completions')
+  // sans l'en-tête : l'origin brute (dev local)
+  const plain = await (await post()).json()
+  assert.equal(plain.accepts[0].resource.startsWith('http://test'), true)
+})
