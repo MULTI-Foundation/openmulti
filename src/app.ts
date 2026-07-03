@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono'
 import { auth, metricsAuth, adminAuth } from './auth.js'
+import { x402Gate } from './x402-gate.js'
 import { rateLimit } from './ratelimit.js'
 import { chat } from './routes/chat.js'
 import { models } from './routes/models.js'
@@ -39,6 +40,9 @@ app.use('/v1/*', async (c, next) => {
   }
   return next()
 })
+// B4 : la gate x402 AVANT l'auth — n'agit que si OPENMULTI_X402=1 ET pas
+// d'Authorization ET surface payante ; sinon passe-plat strict (contrat intact).
+app.use('/v1/*', x402Gate)
 // All /v1 routes require a valid API key, then the (optional) per-key rate limit.
 app.use('/v1/*', auth)
 app.use('/v1/*', rateLimit)
