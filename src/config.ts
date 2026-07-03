@@ -128,6 +128,10 @@ export const config = {
     facilitatorUrl: process.env.OPENMULTI_X402_FACILITATOR_URL || 'https://x402.org/facilitator',
     // Auth du facilitateur (CDP mainnet l'exige) — posée en Authorization: Bearer.
     facilitatorToken: process.env.OPENMULTI_X402_FACILITATOR_TOKEN || '',
+    // Vérificateurs d'AUDIT supplémentaires (CSV d'URLs de facilitateurs) : le
+    // paiement doit être validé par le primaire ET par chacun d'eux (double
+    // vérification, fail-closed). Le settle reste sur le primaire.
+    verifyUrls: (process.env.OPENMULTI_X402_VERIFY_URLS || '').split(',').map((s) => s.trim()).filter(Boolean),
     // Secret HMAC du devis lié (S1). REQUIS quand x402 est activé (check au boot).
     quoteSecret: process.env.OPENMULTI_X402_QUOTE_SECRET || '',
     quoteTtlS: Math.max(30, Number(process.env.OPENMULTI_X402_QUOTE_TTL_S ?? 300)),

@@ -33,7 +33,7 @@ import {
   KNOWN_NETWORKS, claimNonce, mintQuoteToken, paymentRequired, releaseNonce, usdToAtomic, verifyQuoteToken,
   type X402Network,
 } from './x402.js'
-import { httpFacilitator, type Facilitator } from './x402-facilitator.js'
+import { crossVerifyFacilitator, httpFacilitator, type Facilitator } from './x402-facilitator.js'
 import type { AppEnv, ChatRequest } from './types.js'
 
 export const WALLET_PROJECT_PREFIX = 'xw-'
@@ -45,10 +45,13 @@ let facilitator: Facilitator | null = null
 
 function activeFacilitator(): Facilitator {
   if (!facilitator) {
-    facilitator = httpFacilitator({
+    const primary = httpFacilitator({
       baseUrl: config.x402.facilitatorUrl,
       ...(config.x402.facilitatorToken ? { authHeaders: { Authorization: `Bearer ${config.x402.facilitatorToken}` } } : {}),
     })
+    // Double vérification : chaque URL d'audit doit AUSSI valider (settle = primaire).
+    const auditors = config.x402.verifyUrls.map((baseUrl) => httpFacilitator({ baseUrl }))
+    facilitator = crossVerifyFacilitator(primary, auditors)
   }
   return facilitator
 }
