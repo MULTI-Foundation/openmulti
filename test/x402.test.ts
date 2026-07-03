@@ -131,6 +131,28 @@ test('facilitateur http : verify/settle heureux, en-têtes d\'auth transmis', as
   assert.equal(calls[0]!.headers.Authorization, 'Bearer cdp-key')
 })
 
+test('facilitateur http : timeouts distincts verify (court) vs settle (long, mainnet)', async () => {
+  const seen: { path: string; timeoutMs?: number }[] = []
+  const transport = async (url: string, _b: unknown, _h: Record<string, string>, timeoutMs?: number) => {
+    seen.push({ path: url.endsWith('/verify') ? 'verify' : 'settle', timeoutMs })
+    return url.endsWith('/verify')
+      ? { status: 200, data: { isValid: true } }
+      : { status: 200, data: { success: true, transaction: '0xT' } }
+  }
+  // défauts : verify 20s, settle 60s (le settle mainnet est lent, cf incident 2026-07-03)
+  const def = httpFacilitator({ baseUrl: 'https://f.test', transport })
+  await def.verify({}, {})
+  await def.settle({}, {})
+  assert.deepEqual(seen, [{ path: 'verify', timeoutMs: 20_000 }, { path: 'settle', timeoutMs: 60_000 }])
+
+  // surcharges honorées
+  seen.length = 0
+  const custom = httpFacilitator({ baseUrl: 'https://f.test', transport, verifyTimeoutMs: 5_000, settleTimeoutMs: 90_000 })
+  await custom.verify({}, {})
+  await custom.settle({}, {})
+  assert.deepEqual(seen, [{ path: 'verify', timeoutMs: 5_000 }, { path: 'settle', timeoutMs: 90_000 }])
+})
+
 test('facilitateur http : statut != 200, corps difforme ou exception = INVALIDE (fail-closed)', async () => {
   const bad = (data: { status: number; data: unknown } | Error) =>
     httpFacilitator({ baseUrl: 'https://f.test', transport: async () => { if (data instanceof Error) throw data; return data } })

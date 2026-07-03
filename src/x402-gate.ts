@@ -48,9 +48,12 @@ function activeFacilitator(): Facilitator {
     const primary = httpFacilitator({
       baseUrl: config.x402.facilitatorUrl,
       ...(config.x402.facilitatorToken ? { authHeaders: { Authorization: `Bearer ${config.x402.facilitatorToken}` } } : {}),
+      verifyTimeoutMs: config.x402.verifyTimeoutMs,
+      settleTimeoutMs: config.x402.settleTimeoutMs,
     })
     // Double vérification : chaque URL d'audit doit AUSSI valider (settle = primaire).
-    const auditors = config.x402.verifyUrls.map((baseUrl) => httpFacilitator({ baseUrl }))
+    // Les auditeurs ne font que /verify : seul le timeout de verify les concerne.
+    const auditors = config.x402.verifyUrls.map((baseUrl) => httpFacilitator({ baseUrl, verifyTimeoutMs: config.x402.verifyTimeoutMs }))
     facilitator = crossVerifyFacilitator(primary, auditors)
   }
   return facilitator

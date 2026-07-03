@@ -37,15 +37,15 @@ export interface Facilitator {
   settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResult>
 }
 
-/** Transport injectable (tests sans réseau). */
-export type FacilitatorTransport = (url: string, body: unknown, headers: Record<string, string>) => Promise<{ status: number; data: unknown }>
+/** Transport injectable (tests sans réseau). `timeoutMs` : borne par appel. */
+export type FacilitatorTransport = (url: string, body: unknown, headers: Record<string, string>, timeoutMs?: number) => Promise<{ status: number; data: unknown }>
 
-async function defaultTransport(url: string, body: unknown, headers: Record<string, string>): Promise<{ status: number; data: unknown }> {
+async function defaultTransport(url: string, body: unknown, headers: Record<string, string>, timeoutMs?: number): Promise<{ status: number; data: unknown }> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS),
   })
   let data: unknown = null
   try {
@@ -82,11 +82,22 @@ export function crossVerifyFacilitator(primary: Facilitator, auditors: Facilitat
   }
 }
 
+// Un /verify est une LECTURE (rapide) ; un /settle SOUMET une tx on-chain et attend son
+// inclusion — sur mainnet c'est nettement plus long (vu au 1er paiement mainnet 2026-07-03 :
+// settle Dexter > 20s => timeout, l'argent n'avait pas bougé). D'où deux budgets distincts,
+// le settle bien plus large.
+const DEFAULT_VERIFY_TIMEOUT_MS = 20_000
+const DEFAULT_SETTLE_TIMEOUT_MS = 60_000
+
 export interface HttpFacilitatorConfig {
   baseUrl: string // ex. https://x402.org/facilitator (testnet) ou le facilitateur CDP
   /** En-têtes d'auth (le facilitateur CDP mainnet exige une clé API CDP). */
   authHeaders?: Record<string, string>
   transport?: FacilitatorTransport
+  /** Timeout du /verify (lecture). Défaut 20s. */
+  verifyTimeoutMs?: number
+  /** Timeout du /settle (soumission on-chain, lent sur mainnet). Défaut 60s. */
+  settleTimeoutMs?: number
 }
 
 /** Facilitateur HTTP générique (spec x402 : POST /verify et /settle). Toute réponse
@@ -96,10 +107,12 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
   const base = cfg.baseUrl.replace(/\/$/, '')
   const transport = cfg.transport ?? defaultTransport
   const headers = cfg.authHeaders ?? {}
+  const verifyTimeout = cfg.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
+  const settleTimeout = cfg.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS
 
-  async function call(path: string, payload: PaymentPayload, requirements: PaymentRequirements): Promise<Record<string, unknown> | null> {
+  async function call(path: string, payload: PaymentPayload, requirements: PaymentRequirements, timeoutMs: number): Promise<Record<string, unknown> | null> {
     try {
-      const { status, data } = await transport(`${base}${path}`, { x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }, headers)
+      const { status, data } = await transport(`${base}${path}`, { x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }, headers, timeoutMs)
       if (status !== 200 || typeof data !== 'object' || data === null) {
         log.warn('x402_facilitator_bad_response', { path, status })
         return null
@@ -114,7 +127,7 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
   return {
     name: 'http',
     async verify(payload, requirements) {
-      const data = await call('/verify', payload, requirements)
+      const data = await call('/verify', payload, requirements, verifyTimeout)
       if (!data || typeof data.isValid !== 'boolean') return { isValid: false, invalidReason: 'facilitator_unavailable' }
       return {
         isValid: data.isValid,
@@ -123,7 +136,7 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
       }
     },
     async settle(payload, requirements) {
-      const data = await call('/settle', payload, requirements)
+      const data = await call('/settle', payload, requirements, settleTimeout)
       if (!data || typeof data.success !== 'boolean') return { success: false, errorReason: 'facilitator_unavailable' }
       return {
         success: data.success,

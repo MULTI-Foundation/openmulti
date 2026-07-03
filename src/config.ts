@@ -135,6 +135,10 @@ export const config = {
     // Secret HMAC du devis lié (S1). REQUIS quand x402 est activé (check au boot).
     quoteSecret: process.env.OPENMULTI_X402_QUOTE_SECRET || '',
     quoteTtlS: Math.max(30, Number(process.env.OPENMULTI_X402_QUOTE_TTL_S ?? 300)),
+    // Timeouts facilitateur : verify = lecture (court), settle = soumission on-chain
+    // (lent sur mainnet, cf 1er paiement mainnet). Réglables si un facilitateur traîne.
+    verifyTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_X402_VERIFY_TIMEOUT_MS ?? 20000)),
+    settleTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_X402_SETTLE_TIMEOUT_MS ?? 60000)),
   },
   // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
   // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que
