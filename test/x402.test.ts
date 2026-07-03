@@ -140,3 +140,34 @@ test('facilitateur http : statut != 200, corps difforme ou exception = INVALIDE 
   assert.equal((await bad(new Error('réseau')).verify({}, {})).isValid, false)
   assert.equal((await bad(new Error('réseau')).settle({}, {})).success, false)
 })
+
+test('double vérification : tous doivent valider, settle sur le primaire seul', async () => {
+  const calls: string[] = []
+  const mk = (name: string, ok: boolean) => ({
+    name,
+    async verify() { calls.push(`${name}:verify`); return { isValid: ok, ...(ok ? {} : { invalidReason: `${name}_said_no` }) } },
+    async settle() { calls.push(`${name}:settle`); return { success: true, transaction: '0xT' } },
+  })
+  const { crossVerifyFacilitator } = await import('../src/x402-facilitator.ts')
+
+  // tous valides -> valide, settle appelé UNIQUEMENT sur le primaire
+  const all = crossVerifyFacilitator(mk('p', true), [mk('a1', true), mk('a2', true)])
+  assert.equal((await all.verify({}, {})).isValid, true)
+  await all.settle({}, {})
+  assert.deepEqual(calls.filter((c) => c.endsWith('settle')), ['p:settle'])
+
+  // un auditeur refuse -> refus, avec SA raison
+  calls.length = 0
+  const oneNo = crossVerifyFacilitator(mk('p', true), [mk('a1', false)])
+  const v = await oneNo.verify({}, {})
+  assert.equal(v.isValid, false)
+  assert.equal(v.invalidReason, 'a1_said_no')
+
+  // le primaire refuse -> refus aussi
+  const pNo = crossVerifyFacilitator(mk('p', false), [mk('a1', true)])
+  assert.equal((await pNo.verify({}, {})).isValid, false)
+
+  // sans auditeurs : le primaire tel quel
+  const alone = crossVerifyFacilitator(mk('solo', true), [])
+  assert.equal(alone.name, 'solo')
+})

@@ -56,6 +56,32 @@ async function defaultTransport(url: string, body: unknown, headers: Record<stri
   return { status: res.status, data }
 }
 
+/** Double vérification (décision Julien 2026-07-03 : « croiser deux facilitateurs ») :
+ * le paiement n'est accepté que si le PRIMAIRE **et tous les auditeurs** le valident —
+ * un facilitateur menteur ou compromis ne suffit plus à faire servir une requête.
+ * Le settle reste sur le primaire seul (les auditeurs n'ont besoin ni de clé ni de gas).
+ * Fail-closed par construction : un auditeur injoignable = verify invalide. */
+export function crossVerifyFacilitator(primary: Facilitator, auditors: Facilitator[]): Facilitator {
+  if (auditors.length === 0) return primary
+  return {
+    name: `${primary.name}+${auditors.length}audit`,
+    async verify(payload, requirements) {
+      const results = await Promise.all([
+        primary.verify(payload, requirements),
+        ...auditors.map((a) => a.verify(payload, requirements)),
+      ])
+      const idx = results.findIndex((v) => !v.isValid)
+      if (idx >= 0) {
+        const bad = results[idx]!
+        log.warn('x402_cross_verify_rejected', { by: idx === 0 ? 'primary' : `auditor_${idx}`, reason: bad.invalidReason ?? '' })
+        return bad
+      }
+      return results[0]!
+    },
+    settle: (payload, requirements) => primary.settle(payload, requirements),
+  }
+}
+
 export interface HttpFacilitatorConfig {
   baseUrl: string // ex. https://x402.org/facilitator (testnet) ou le facilitateur CDP
   /** En-têtes d'auth (le facilitateur CDP mainnet exige une clé API CDP). */
