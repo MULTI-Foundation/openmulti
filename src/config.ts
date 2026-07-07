@@ -135,6 +135,11 @@ export const config = {
     // Secret HMAC du devis lié (S1). REQUIS quand x402 est activé (check au boot).
     quoteSecret: process.env.OPENMULTI_X402_QUOTE_SECRET || '',
     quoteTtlS: Math.max(30, Number(process.env.OPENMULTI_X402_QUOTE_TTL_S ?? 300)),
+    // Plancher du devis, en USD. Le facilitateur CDP rejette les micro-montants
+    // (amount_too_low sous ~0.001 USD, constaté au 1er paiement CDP 2026-07-07). Sans
+    // coût pour le payeur : le trop-perçu est crédité en solde wallet. 0 = pas de
+    // plancher (iso, le défaut code) ; mainnet CDP : poser 0.001.
+    quoteMinUsd: Math.max(0, Number(process.env.OPENMULTI_X402_QUOTE_MIN_USD ?? 0)),
     // Timeouts facilitateur : verify = lecture (court), settle = soumission on-chain
     // (lent sur mainnet, cf 1er paiement mainnet). Réglables si un facilitateur traîne.
     verifyTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_X402_VERIFY_TIMEOUT_MS ?? 20000)),

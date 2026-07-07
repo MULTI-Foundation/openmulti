@@ -154,6 +154,19 @@ test('requête non bornable (pas de max_tokens ni plafond) : 402 explicatif SANS
   assert.match(j.error.message, /max_tokens/)
 })
 
+test('plancher de devis (quoteMinUsd) : le 402 monte au plancher et le parcours payé passe', async (t) => {
+  const { config } = await import('../src/config.ts')
+  const prev = config.x402.quoteMinUsd
+  ;(config.x402 as { quoteMinUsd: number }).quoteMinUsd = 0.001
+  t.after(() => { (config.x402 as { quoteMinUsd: number }).quoteMinUsd = prev })
+  // le micro-devis (< 0.001 $) est relevé au plancher — CDP rejette en dessous (amount_too_low)
+  const { atomic, token } = await getQuote()
+  assert.equal(atomic, '1000') // 0.001 USD en unités atomiques USDC
+  // couverture + requirements cohérents avec le plancher : le parcours payé passe
+  const res = await post({ 'x-payment': paymentHeader(atomic, '0xnFloor'), 'x-openmulti-quote': token })
+  assert.equal(res.status, 200)
+})
+
 // ── Parcours payé ─────────────────────────────────────────────────────────────────
 
 test('parcours payé complet : verify+settle, crédit wallet, exécution, reçu, solde = payé - facturé', async () => {

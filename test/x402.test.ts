@@ -209,6 +209,25 @@ test('facilitateur http : statut != 200, corps difforme ou exception = INVALIDE 
   assert.equal((await bad(new Error('réseau')).settle({}, {})).success, false)
 })
 
+test('facilitateur http : un refus explicite en 4xx remonte sa raison, un non-200 ne valide jamais', async () => {
+  const mk = (status: number, data: unknown) =>
+    httpFacilitator({ baseUrl: 'https://f.test', transport: async () => ({ status, data }) })
+  // CDP rend son verdict avec un 400 : la vraie raison sort (pas facilitator_unavailable)
+  assert.deepEqual(
+    await mk(400, { isValid: false, invalidReason: 'amount_too_low' }).verify({}, {}),
+    { isValid: false, invalidReason: 'amount_too_low' },
+  )
+  const s = await mk(400, { success: false, errorReason: 'amount_too_low' }).settle({}, {})
+  assert.equal(s.success, false)
+  assert.equal(s.errorReason, 'amount_too_low')
+  // fail-closed inchangé : un statut non-200 ne peut JAMAIS valider ni régler
+  assert.deepEqual(await mk(500, { isValid: true }).verify({}, {}), { isValid: false, invalidReason: 'facilitator_unavailable' })
+  assert.deepEqual(
+    await mk(500, { success: true, transaction: '0xT' }).settle({}, {}),
+    { success: false, errorReason: 'facilitator_unavailable' },
+  )
+})
+
 test('double vérification : tous doivent valider, settle sur le primaire seul', async () => {
   const calls: string[] = []
   const mk = (name: string, ok: boolean) => ({

@@ -114,27 +114,32 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
   const verifyTimeout = cfg.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
   const settleTimeout = cfg.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS
 
-  async function call(op: 'verify' | 'settle', payload: PaymentPayload, requirements: PaymentRequirements, timeoutMs: number): Promise<Record<string, unknown> | null> {
+  async function call(op: 'verify' | 'settle', payload: PaymentPayload, requirements: PaymentRequirements, timeoutMs: number): Promise<{ ok: boolean; data: Record<string, unknown> | null }> {
     const path = `/${op}`
     try {
       const h = cfg.authHeadersFor ? { ...headers, ...(await cfg.authHeadersFor(op)) } : headers
       const { status, data } = await transport(`${base}${path}`, { x402Version: 1, paymentPayload: payload, paymentRequirements: requirements }, h, timeoutMs)
-      if (status !== 200 || typeof data !== 'object' || data === null) {
+      if (typeof data !== 'object' || data === null) {
         log.warn('x402_facilitator_bad_response', { path, status })
-        return null
+        return { ok: false, data: null }
       }
-      return data as Record<string, unknown>
+      if (status !== 200) log.warn('x402_facilitator_bad_response', { path, status })
+      return { ok: status === 200, data: data as Record<string, unknown> }
     } catch (e) {
       log.warn('x402_facilitator_error', { path, error: e instanceof Error ? e.message : String(e) })
-      return null
+      return { ok: false, data: null }
     }
   }
 
   return {
     name: 'http',
     async verify(payload, requirements) {
-      const data = await call('verify', payload, requirements, verifyTimeout)
+      const { ok, data } = await call('verify', payload, requirements, verifyTimeout)
       if (!data || typeof data.isValid !== 'boolean') return { isValid: false, invalidReason: 'facilitator_unavailable' }
+      // Un statut non-200 ne VALIDE jamais un paiement (fail-closed inchangé) ; il peut
+      // seulement porter un refus explicite dont on remonte la vraie raison (CDP rend
+      // son verdict en 400 : {isValid:false, invalidReason:"amount_too_low"}).
+      if (!ok && data.isValid !== false) return { isValid: false, invalidReason: 'facilitator_unavailable' }
       return {
         isValid: data.isValid,
         ...(typeof data.invalidReason === 'string' ? { invalidReason: data.invalidReason } : {}),
@@ -142,8 +147,11 @@ export function httpFacilitator(cfg: HttpFacilitatorConfig): Facilitator {
       }
     },
     async settle(payload, requirements) {
-      const data = await call('settle', payload, requirements, settleTimeout)
+      const { ok, data } = await call('settle', payload, requirements, settleTimeout)
       if (!data || typeof data.success !== 'boolean') return { success: false, errorReason: 'facilitator_unavailable' }
+      // Même règle que verify : un non-200 ne règle jamais, mais son refus explicite
+      // ({success:false, errorReason}) est remonté tel quel.
+      if (!ok && data.success !== false) return { success: false, errorReason: 'facilitator_unavailable' }
       return {
         success: data.success,
         ...(typeof data.errorReason === 'string' ? { errorReason: data.errorReason } : {}),

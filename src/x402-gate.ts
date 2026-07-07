@@ -143,7 +143,12 @@ function quoteUsd(req: ChatRequest): number | undefined {
   if (req.openmulti?.council || req.model === 'council') return undefined
   const decision = route(req)
   const q = computeQuote(req, decision.model, decision.maxTokensCeiling, 1 + config.marginPct / 100)
-  return q.quote?.max_cost_usd
+  const maxUsd = q.quote?.max_cost_usd
+  if (maxUsd === undefined) return undefined
+  // Plancher (quoteMinUsd) : CDP rejette les micro-devis (amount_too_low). Appliqué
+  // ICI pour couvrir d'un seul point le 402, le jeton lié, le contrôle de couverture
+  // et les requirements re-présentés au facilitateur.
+  return Math.max(maxUsd, config.x402.quoteMinUsd)
 }
 
 const err = (message: string, type: string) => ({ error: { message, type } })
