@@ -212,6 +212,17 @@ chat.post('/v1/chat/completions', async (c) => {
         call = await provider.call(body)
       } catch (e) {
         const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
+        // P0-11 : sous contrat (jeton de devis présenté), AU PLUS UN dispatch upstream.
+        // Un échec transport APRÈS envoi (timeout, reset en cours de lecture) peut déjà
+        // avoir été facturé côté provider ; un retry ou un failover re-facturerait le
+        // même étage et pourrait dépasser le montant signé — le devis ne couvre chaque
+        // étage qu'UNE fois. Direction sûre : refus structuré, zéro re-dispatch ;
+        // l'appelant relance s'il le veut (nouvelle exécution, nouveau paiement).
+        if (pin) {
+          log.error('upstream_error_contract_no_retry', { key, model: decision.model, provider: provider.name, reason, durationMs: Date.now() - startedAt })
+          record({ error: true, durationMs: Date.now() - startedAt })
+          return c.json({ error: { message: `${reason} — no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
+        }
         if (attempt < config.maxRetries) {
           attempt++
           recordRetry(key, decision.model, provider.name)
@@ -229,6 +240,10 @@ chat.post('/v1/chat/completions', async (c) => {
       }
 
       if (!call.response.ok && provider.isRetryable(call.response.status)) {
+        // P0-11 : même règle sous contrat pour un statut transitoire REÇU (429/5xx) —
+        // pas de retry ni de failover ; l'erreur upstream normalisée (OM-07) est
+        // renvoyée telle quelle, statut conservé. Un seul dispatch a eu lieu.
+        if (pin) break pathLoop
         if (attempt < config.maxRetries) {
           attempt++
           const retryAfter = call.response.headers.get('retry-after')
