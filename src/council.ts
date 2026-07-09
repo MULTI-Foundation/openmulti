@@ -116,10 +116,13 @@ export async function runCouncil(
   const usageParts: UsagePart[] = okPanel.map((r) => (r.data?.usage as UsagePart) ?? {})
 
   // Étape 2 (deliberate) : revue par les pairs anonymisée.
+  // P0-3 : on n'envoie la ronde de review qu'aux SURVIVANTS de l'étape 1 (okPanel),
+  // pas au panel configuré complet — sinon on dépense des appels sur des membres déjà
+  // morts à l'étape 1.
   let reviews: string[] = []
   if (mode === 'deliberate' && okPanel.length >= 2) {
     const reviewResults = await Promise.all(
-      panel.map((m) => deps.forward(subRequest(m, buildReviewMessages(userMessages, anon), req), ctx)),
+      okPanel.map((r) => deps.forward(subRequest(r.model, buildReviewMessages(userMessages, anon), req), ctx)),
     )
     for (const r of reviewResults) {
       if (r.ok) {
@@ -137,9 +140,13 @@ export async function runCouncil(
     finalText = responseText(chairRes.data)
     usageParts.push((chairRes.data?.usage as UsagePart) ?? {})
   } else {
-    // Dégradation gracieuse : si le chair échoue, on rend la meilleure réponse du panel.
+    // Dégradation gracieuse : le chair a échoué. Faute de synthèse, on rend la réponse
+    // survivante la PLUS LONGUE — proxy grossier mais honnête d'un signal de contenu
+    // (P0-4 : pas de « meilleure » sans juge ; l'ancien texts[0] = premier survivant
+    // dans l'ordre de config, sans aucun signal de qualité). texts est non vide
+    // (okPanel.length >= 1 garanti plus haut).
     log.warn('council_chair_failed', { key: ctx.key, chair, status: chairRes.status })
-    finalText = texts[0]!
+    finalText = texts.reduce((a, b) => (b.length > a.length ? b : a))
   }
 
   const usage = aggregateUsage(usageParts)

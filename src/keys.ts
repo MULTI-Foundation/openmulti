@@ -20,14 +20,20 @@ import { createHash, randomBytes } from 'node:crypto'
 import { storeClient, storeHealthy } from './store.js'
 import { config } from './config.js'
 import { meterDay } from './meter.js'
+import { usdToMicro, microToUsd } from './micro-usd.js'
 import { log } from './log.js'
 
 const REGISTRY = 'keys:registry'
 const CAPS = 'caps:usd_per_day'
 const MARGINS = 'margins:pct'
-const CREDITS = 'credits:usd' // total achete (cumulatif), pousse par la console
+// Ledgers crédits/dépense : depuis E-4, les écritures vont dans les hash *:microusd
+// (entiers, HINCRBY). Les hash legacy en USD flottants ne sont plus incrémentés mais
+// toujours LUS et additionnés au refresh — les soldes pré-migration restent justes.
+const CREDITS = 'credits:usd' // legacy (float) : lu seulement
+const CREDITS_MICRO = 'credits:microusd' // total achete (cumulatif), micro-USD entiers
 const CREDIT_REFS = 'credits:refs' // idempotence des top-ups (field: projet|ref)
-const SPENT = 'spent:usd' // cumul facture, incremente par meter.ts
+const SPENT = 'spent:usd' // legacy (float) : lu seulement
+const SPENT_MICRO = 'spent:microusd' // cumul facture, incremente par meter.ts
 const REFRESH_MS = Math.max(1000, Number(process.env.OPENMULTI_KEYS_REFRESH_MS ?? 10_000))
 
 export interface KeyRecord {
@@ -43,14 +49,24 @@ let registryKeys: string[] = [] // les clés actives (secrets), pour l'auth
 let registryRecords: (KeyRecord & { key: string })[] = []
 let caps = new Map<string, number>() // projet -> USD/jour (en dollars FACTURÉS)
 let margins = new Map<string, number>() // projet -> marge % (surcharge du défaut config)
-let credits = new Map<string, number>() // projet -> total crédité (prépayé)
-let spentTotal = new Map<string, number>() // projet -> cumul facturé (depuis le store)
-let localBilled = new Map<string, number>() // facturé localement depuis le dernier refresh
-let spendToday = new Map<string, number>() // projet -> USD facturés observés (refresh + local)
+// Comptes internes en micro-USD ENTIERS (E-4) — conversion USD aux frontières seulement.
+let credits = new Map<string, number>() // projet -> total crédité (prépayé), µ$
+let spentTotal = new Map<string, number>() // projet -> cumul facturé (depuis le store), µ$
+let localBilled = new Map<string, number>() // facturé localement depuis le dernier refresh, µ$
+let spendToday = new Map<string, number>() // projet -> µ$ facturés observés (refresh + local)
 let spendDay = '' // jour UTC du cache de dépense (reset au changement de jour)
 let timer: ReturnType<typeof setInterval> | null = null
 
 export const keyId = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 12)
+
+/** Fusionne un ledger legacy (USD flottants) et son successeur micro-USD entier en une
+ * vue µ$ par projet. Un projet présent dans l'UN des deux est « posé » (prépayé). */
+function mergeLedgers(usdHash: Record<string, string>, microHash: Record<string, string>): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const [p, v] of Object.entries(usdHash)) out.set(p, usdToMicro(Number(v) || 0))
+  for (const [p, v] of Object.entries(microHash)) out.set(p, (out.get(p) ?? 0) + (Number(v) || 0))
+  return out
+}
 
 /** Clés actives du registre (cache mémoire) — consommé par auth.ts en plus de l'env. */
 export function registryApiKeys(): string[] {
@@ -61,11 +77,12 @@ export async function refreshKeys(): Promise<void> {
   const c = storeClient()
   if (!c || !storeHealthy()) return // fail-open : on garde le dernier état connu
   try {
-    const [reg, capHash, marginHash, creditHash, spentHash] = await Promise.all([
-      c.hGetAll(REGISTRY), c.hGetAll(CAPS), c.hGetAll(MARGINS), c.hGetAll(CREDITS), c.hGetAll(SPENT),
+    const [reg, capHash, marginHash, creditHash, creditMicroHash, spentHash, spentMicroHash] = await Promise.all([
+      c.hGetAll(REGISTRY), c.hGetAll(CAPS), c.hGetAll(MARGINS),
+      c.hGetAll(CREDITS), c.hGetAll(CREDITS_MICRO), c.hGetAll(SPENT), c.hGetAll(SPENT_MICRO),
     ])
-    credits = new Map(Object.entries(creditHash).map(([p, v]) => [p, Number(v) || 0]))
-    spentTotal = new Map(Object.entries(spentHash).map(([p, v]) => [p, Number(v) || 0]))
+    credits = mergeLedgers(creditHash, creditMicroHash)
+    spentTotal = mergeLedgers(spentHash, spentMicroHash)
     localBilled = new Map() // le store vient d'etre relu : l'accumulateur local repart
     margins = new Map(
       Object.entries(marginHash).map(([p, v]) => [p, Number(v)]).filter(([, v]) => Number.isFinite(v) && (v as number) >= 0) as [string, number][],
@@ -89,15 +106,20 @@ export async function refreshKeys(): Promise<void> {
     const spend = new Map<string, number>()
     for (const project of caps.keys()) {
       const hash = await c.hGetAll(`meter:${project}:${day}`)
-      let billed = 0
-      let rawCost = 0
+      let billed = 0 // µ$
+      let rawCost = 0 // µ$
       let hasBilled = false
       for (const [field, raw] of Object.entries(hash)) {
-        if (field.endsWith('|billed_usd')) {
+        if (field.endsWith('|billed_microusd')) {
           billed += Number(raw) || 0
           hasBilled = true
-        } else if (field.endsWith('|cost_usd')) {
+        } else if (field.endsWith('|billed_usd')) {
+          billed += usdToMicro(Number(raw) || 0)
+          hasBilled = true
+        } else if (field.endsWith('|cost_microusd')) {
           rawCost += Number(raw) || 0
+        } else if (field.endsWith('|cost_usd')) {
+          rawCost += usdToMicro(Number(raw) || 0)
         }
       }
       spend.set(project, hasBilled ? billed : rawCost)
@@ -121,16 +143,17 @@ export function initKeys(): void {
 /** Coût observé localement (appelé par routes/chat.ts à chaque réponse) : comble le
  * trou entre deux refreshs pour que le plafond morde sans attendre le prochain sync. */
 export function noteLocalSpend(project: string, billedUsd: number): void {
-  if (!billedUsd) return
+  const billedMicro = usdToMicro(billedUsd) // conversion à la frontière, cumul entier (E-4)
+  if (!billedMicro) return
   // solde prepaye : on decompte localement entre deux refreshs
-  if (credits.has(project)) localBilled.set(project, (localBilled.get(project) ?? 0) + billedUsd)
+  if (credits.has(project)) localBilled.set(project, (localBilled.get(project) ?? 0) + billedMicro)
   if (!caps.has(project)) return
   const day = meterDay()
   if (day !== spendDay) {
     spendToday = new Map()
     spendDay = day
   }
-  spendToday.set(project, (spendToday.get(project) ?? 0) + billedUsd)
+  spendToday.set(project, (spendToday.get(project) ?? 0) + billedMicro)
 }
 
 export interface CapVerdict {
@@ -145,8 +168,8 @@ export function checkSpendCap(project: string): CapVerdict {
   const cap = caps.get(project)
   if (!cap) return { blocked: false }
   if (meterDay() !== spendDay) return { blocked: false, capUsd: cap, spentUsd: 0 } // jour neuf, refresh pas encore passé
-  const spent = spendToday.get(project) ?? 0
-  return { blocked: spent >= cap, capUsd: cap, spentUsd: spent }
+  const spent = spendToday.get(project) ?? 0 // µ$
+  return { blocked: spent >= usdToMicro(cap), capUsd: cap, spentUsd: microToUsd(spent) }
 }
 
 // ── Solde prépayé (la console pousse les top-ups, le gateway décompte) ─────────
@@ -162,31 +185,38 @@ export interface BalanceVerdict {
 export function checkBalance(project: string): BalanceVerdict {
   const total = credits.get(project)
   if (total === undefined) return { blocked: false }
-  const balance = total - (spentTotal.get(project) ?? 0) - (localBilled.get(project) ?? 0)
-  return { blocked: balance <= 0, balanceUsd: balance }
+  const balance = total - (spentTotal.get(project) ?? 0) - (localBilled.get(project) ?? 0) // µ$ entiers
+  return { blocked: balance <= 0, balanceUsd: microToUsd(balance) }
 }
 
 // audit 2026-07-02 : dédup ET crédit dans UN script Lua — un crash entre les deux
 // commandes ne peut plus marquer la ref appliquée sans avoir crédité (crédit perdu).
 // HSETNX (vs HSET) : une redelivery avec un montant différent ne réécrit pas le
-// montant enregistré de la ref. Retourne nil si duplicate, sinon le nouveau total.
+// montant enregistré de la ref (en USD, valeur d'audit). Le crédit s'incrémente en
+// micro-USD ENTIERS (HINCRBY, E-4). Retourne nil si duplicate, sinon le nouveau total.
 const ADD_CREDITS_LUA = `
 if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 0 then
   return nil
 end
-return redis.call('HINCRBYFLOAT', KEYS[2], ARGV[3], ARGV[2])
+return redis.call('HINCRBY', KEYS[2], ARGV[3], ARGV[4])
 `.trim()
 
 /** Top-up idempotent (ref = id d'événement Stripe côté console). Retourne le nouveau
- * total crédité, ou null si store coupé / entrée invalide ; 'duplicate' si la ref a
- * déjà été appliquée (la console peut re-livrer un webhook sans double-créditer). */
+ * total crédité (USD — la frontière reste en flottants), ou null si store coupé /
+ * entrée invalide ; 'duplicate' si la ref a déjà été appliquée (la console peut
+ * re-livrer un webhook sans double-créditer). */
 export async function addCredits(project: string, usd: number, ref: string): Promise<number | null | 'duplicate'> {
   if (!PROJECT_RE.test(project) || !Number.isFinite(usd) || usd <= 0 || !ref || ref.length > 128) return null
+  const micro = usdToMicro(usd)
+  if (micro <= 0) return null // sous la résolution du ledger (< 0.5 µ$)
   const c = storeClient()
   if (!c) return null
   const refField = `${project}|${ref}`
   if (c.eval) {
-    const total = await c.eval(ADD_CREDITS_LUA, { keys: [CREDIT_REFS, CREDITS], arguments: [refField, String(usd), project] })
+    const total = await c.eval(ADD_CREDITS_LUA, {
+      keys: [CREDIT_REFS, CREDITS_MICRO],
+      arguments: [refField, String(usd), project, String(micro)],
+    })
     if (total === null) return 'duplicate'
   } else {
     // Repli deux temps (client sans eval) — audit #8 : dédup atomique via le retour de
@@ -194,10 +224,11 @@ export async function addCredits(project: string, usd: number, ref: string): Pro
     // fermée par le chemin Lua ci-dessus en production.
     const fresh = (await c.hSet(CREDIT_REFS, refField, String(usd))) as number
     if (fresh === 0) return 'duplicate'
-    await c.hIncrByFloat(CREDITS, project, usd)
+    await c.hIncrBy(CREDITS_MICRO, project, micro)
   }
   await refreshKeys()
-  return credits.get(project) ?? usd
+  const total = credits.get(project)
+  return total !== undefined ? microToUsd(total) : usd
 }
 
 /** URL de recharge pour un projet (template OPENMULTI_TOPUP_URL), ou undefined. */
@@ -223,14 +254,14 @@ export function projectAccount(project: string): ProjectAccount {
   const cap = caps.get(project)
   const out: ProjectAccount = { prepaid: total !== undefined }
   if (total !== undefined) {
-    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0)
-    out.creditsUsd = total
-    out.spentUsd = spent
-    out.balanceUsd = total - spent
+    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0) // µ$
+    out.creditsUsd = microToUsd(total)
+    out.spentUsd = microToUsd(spent)
+    out.balanceUsd = microToUsd(total - spent)
   }
   if (cap !== undefined) {
     out.capUsdPerDay = cap
-    out.spentTodayUsd = meterDay() === spendDay ? (spendToday.get(project) ?? 0) : 0
+    out.spentTodayUsd = meterDay() === spendDay ? microToUsd(spendToday.get(project) ?? 0) : 0
   }
   return out
 }
@@ -238,8 +269,8 @@ export function projectAccount(project: string): ProjectAccount {
 export function balanceReport(): Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> {
   const out: Record<string, { creditsUsd: number; spentUsd: number; balanceUsd: number }> = {}
   for (const [project, total] of credits) {
-    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0)
-    out[project] = { creditsUsd: total, spentUsd: spent, balanceUsd: total - spent }
+    const spent = (spentTotal.get(project) ?? 0) + (localBilled.get(project) ?? 0) // µ$
+    out[project] = { creditsUsd: microToUsd(total), spentUsd: microToUsd(spent), balanceUsd: microToUsd(total - spent) }
   }
   return out
 }

@@ -159,12 +159,21 @@ function adaptStream(upstream: ReadableStream<Uint8Array>, model: string): Reada
     return out
   }
 
+  let readError = false
+
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       while (true) {
-        const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined as Uint8Array | undefined }))
+        const { done, value } = await reader.read().catch(() => {
+          readError = true
+          return { done: true, value: undefined as Uint8Array | undefined }
+        })
         if (done) {
-          const finish = mapStopReason(stopReason, stopReason === 'tool_use')
+          // P0-8 : une erreur de lecture mi-stream (upstream tronqué) se termine par un
+          // finish_reason 'error' + objet error — jamais une fin d'apparence normale.
+          // Le scanner côté route (SseUsageScanner.errored) en fait une observation
+          // d'erreur pour le bandit ; l'usage partiel compté jusque-là est conservé.
+          const finish = readError ? 'error' : mapStopReason(stopReason, stopReason === 'tool_use')
           controller.enqueue(chunkBytes({}, finish))
           const tokens = anthropicTokens({
             input_tokens: inputTokens,
@@ -175,9 +184,12 @@ function adaptStream(upstream: ReadableStream<Uint8Array>, model: string): Reada
           const usage: Dict = { ...tokens }
           const cost = costOrMiss(model, tokens.prompt_tokens, tokens.completion_tokens)
           if (cost !== undefined) usage.cost = cost
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [], usage })}\n\n`),
-          )
+          const final: Dict = { id, object: 'chat.completion.chunk', created, model, choices: [], usage }
+          if (readError) {
+            final.error = { message: 'upstream stream truncated', type: 'upstream_error' }
+            log.warn('anthropic_stream_truncated', { model })
+          }
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(final)}\n\n`))
           controller.enqueue(encoder.encode('data: [DONE]\n\n'))
           controller.close()
           return

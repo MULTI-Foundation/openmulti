@@ -93,6 +93,10 @@ export class SseUsageScanner {
   private buffer = ''
   usage: SseUsage | null = null
   provider: string | null = null
+  /** P0-8 : le flux a porté un événement d'erreur (objet `error` ou finish_reason
+   * 'error') — un stream tronqué/en échec doit produire une observation d'erreur,
+   * pas une terminaison d'apparence normale (cf routes/chat.ts, providers/anthropic.ts). */
+  errored = false
 
   /** Feed a decoded text chunk. Updates usage/provider as complete lines arrive. */
   push(text: string): void {
@@ -105,6 +109,8 @@ export class SseUsageScanner {
         const parsed = JSON.parse(line.slice(6))
         if (parsed.usage) this.usage = parsed.usage
         if (parsed.provider) this.provider = parsed.provider
+        if (parsed.error) this.errored = true
+        if (Array.isArray(parsed.choices) && parsed.choices[0]?.finish_reason === 'error') this.errored = true
       } catch {
         // partial/non-JSON data line — ignore, the bytes still reach the client.
       }

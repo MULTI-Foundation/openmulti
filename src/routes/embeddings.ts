@@ -53,9 +53,16 @@ embeddings.post('/v1/embeddings', async (c) => {
     )
   }
 
+  // P0-5 : on RE-MESURE le body bufferisé (comme chat.ts:63-66). Le middleware
+  // Content-Length (app.ts) rejette les clients honnêtes trop gros avant buffering ;
+  // ceci attrape un Content-Length absent/menteur (sinon la limite est contournée).
+  const raw = await c.req.text().catch(() => '')
+  if (config.maxBodyBytes > 0 && Buffer.byteLength(raw) > config.maxBodyBytes) {
+    return c.json({ error: { message: 'Request body too large', type: 'invalid_request_error' } }, 413)
+  }
   let req: Record<string, unknown>
   try {
-    req = (await c.req.json()) as Record<string, unknown>
+    req = JSON.parse(raw) as Record<string, unknown>
   } catch {
     return c.json({ error: { message: 'Invalid JSON body', type: 'invalid_request_error' } }, 400)
   }
@@ -73,10 +80,12 @@ embeddings.post('/v1/embeddings', async (c) => {
   const marginFactor = 1 + marginFor(key) / 100
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model, provider: 'openrouter', ...r }
-    if (rec.costUsd) rec.billedUsd = rec.costUsd * marginFactor
+    // P0-6 : != null, pas truthiness — un coût légitime de 0 doit produire billedUsd=0
+    // (facturé/compté), pas être escamoté comme absent.
+    if (rec.costUsd != null) rec.billedUsd = rec.costUsd * marginFactor
     recordRequest(rec)
     meterUsage(rec)
-    if (rec.billedUsd) noteLocalSpend(key, rec.billedUsd)
+    if (rec.billedUsd != null) noteLocalSpend(key, rec.billedUsd)
   }
 
   log.info('embeddings_request', { key, model })

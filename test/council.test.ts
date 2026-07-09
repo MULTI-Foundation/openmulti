@@ -146,6 +146,50 @@ test('chair echoue -> degradation gracieuse (meilleure reponse du panel)', async
   assert.equal((out.body.openmulti as any).council.chair, null)
 })
 
+test('P0-3 deliberate : la ronde de review ne touche QUE les survivants de l\'etape 1', async () => {
+  // Panel budget (3 membres) en mode deliberate, m/cheap2 mort des l'etape 1.
+  // Avant le fix, la review mappait sur `panel` complet -> un appel gaspille sur le
+  // membre mort. Apres, elle mappe sur okPanel -> zero appel sur cheap2 en review.
+  const calls: { model: string; review: boolean }[] = []
+  const forward = async (req: any) => {
+    const model = req.model as string
+    const last = String(req.messages[req.messages.length - 1]?.content ?? '')
+    const isReview = last.includes('one reviewer')
+    calls.push({ model, review: isReview })
+    if (model === 'm/cheap2') return { ok: false, status: 502, model, provider: 'stub', reason: '' }
+    const isChair = model === 'm/chair'
+    const content = isChair ? 'FINAL' : isReview ? `review:${model}` : `answer:${model}`
+    const cost = isChair ? 0.05 : isReview ? 0.01 : 0.02
+    return { ok: true, status: 200, model, provider: 'stub', reason: '', costUsd: cost,
+      data: { choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 20, cost } } }
+  }
+  const req: any = { messages: [{ role: 'user', content: 'q' }], openmulti: { council: { preset: 'budget', mode: 'deliberate' } } }
+  const out = await C.runCouncil(req, { key: KEY, marginFactor: 1 }, { forward } as any)
+  assert.equal(out.status, 200)
+  const cheap2Calls = calls.filter((c) => c.model === 'm/cheap2')
+  assert.equal(cheap2Calls.length, 1, 'le membre mort ne doit etre appele qu\'a l\'etape 1, jamais en review')
+  assert.equal(cheap2Calls[0]!.review, false)
+  const reviewers = calls.filter((c) => c.review).map((c) => c.model).sort()
+  assert.deepEqual(reviewers, ['m/cheap1', 'm/cheap3'])
+})
+
+test('P0-4 chair echoue : fallback sur la reponse survivante la PLUS LONGUE', async () => {
+  // m/a (premier dans l'ordre de config) repond court, m/b repond long. L'ancien
+  // fallback rendait texts[0] = 'court' ; le fix rend la plus longue (signal de contenu).
+  const forward = async (req: any) => {
+    const model = req.model as string
+    if (model === 'm/chair') return { ok: false, status: 502, model, provider: 'stub', reason: '' }
+    const content = model === 'm/a' ? 'court' : 'une reponse nettement plus longue et detaillee'
+    return { ok: true, status: 200, model, provider: 'stub', reason: '', costUsd: 0.02,
+      data: { choices: [{ message: { role: 'assistant', content } }], usage: { cost: 0.02 } } }
+  }
+  const req: any = { messages: [{ role: 'user', content: 'q' }], openmulti: { council: {} } }
+  const out = await C.runCouncil(req, { key: KEY, marginFactor: 1 }, { forward } as any)
+  assert.equal(out.status, 200)
+  assert.equal((out.body.choices as any)[0].message.content, 'une reponse nettement plus longue et detaillee')
+  assert.equal((out.body.openmulti as any).council.chair, null)
+})
+
 test('marge appliquee au cout agrege ; pas de trace openmulti sans extension', async () => {
   const withExt: any = { messages: [{ role: 'user', content: 'q' }], openmulti: { council: {} } }
   const a = await C.runCouncil(withExt, { key: KEY, marginFactor: 1.2 }, { forward: stub() } as any)

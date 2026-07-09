@@ -17,6 +17,7 @@
 import { storeClient, storeHealthy, _setStoreClientForTests, type StoreClient } from './store.js'
 import { log } from './log.js'
 import { recordMeterDrop } from './metrics.js'
+import { usdToMicro, microToUsd } from './micro-usd.js'
 import type { RequestRecord } from './metrics.js'
 
 /** @deprecated alias historique — le client vit dans store.ts désormais. */
@@ -48,12 +49,18 @@ export function meterUsage(r: RequestRecord): void {
   if (r.error) writes.push(c.hIncrBy(key, f('errors'), 1))
   if (r.promptTokens) writes.push(c.hIncrBy(key, f('prompt_tokens'), r.promptTokens))
   if (r.completionTokens) writes.push(c.hIncrBy(key, f('completion_tokens'), r.completionTokens))
-  if (r.costUsd) writes.push(c.hIncrByFloat(key, f('cost_usd'), r.costUsd))
-  if (r.billedUsd) {
-    writes.push(c.hIncrByFloat(key, f('billed_usd'), r.billedUsd))
+  // E-4 : les montants s'écrivent en micro-USD ENTIERS (HINCRBY, jamais HINCRBYFLOAT
+  // qui dérive). Les champs legacy *_usd / spent:usd ne sont plus incrémentés mais
+  // restent lus (readUsage, refreshKeys) : les données pré-migration comptent toujours.
+  // P0-6 : != null, pas truthiness — un appel à coût 0 écrit ses champs à 0 (mesuré,
+  // distinguable d'un appel non mesuré où les champs sont absents du hash).
+  if (r.costUsd != null) writes.push(c.hIncrBy(key, f('cost_microusd'), usdToMicro(r.costUsd)))
+  if (r.billedUsd != null) {
+    const billedMicro = usdToMicro(r.billedUsd)
+    writes.push(c.hIncrBy(key, f('billed_microusd'), billedMicro))
     // Cumul a vie du facture par projet : la base du solde prepaye
     // (balance = credits - spent, cf keys.ts). Pas de TTL : c'est du ledger.
-    writes.push(c.hIncrByFloat('spent:usd', r.key, r.billedUsd))
+    writes.push(c.hIncrBy('spent:microusd', r.key, billedMicro))
   }
   // Registre des projets connus (pour GET /admin/usage multi-projets). Idempotent.
   writes.push(c.hSet('projects:known', r.key, '1'))
@@ -92,8 +99,15 @@ const FIELD_TO_PROP: Record<string, keyof UsageBreakdown> = {
   errors: 'errors',
   prompt_tokens: 'promptTokens',
   completion_tokens: 'completionTokens',
+  // Legacy pré-E-4 : champs flottants, plus écrits mais toujours lus.
   cost_usd: 'costUsd',
   billed_usd: 'billedUsd',
+}
+
+// Champs micro-USD entiers (E-4) : convertis en USD à la lecture (frontière de sortie).
+const MICRO_FIELD_TO_PROP: Record<string, keyof UsageBreakdown> = {
+  cost_microusd: 'costUsd',
+  billed_microusd: 'billedUsd',
 }
 
 /** Lecture agrégée sur les `days` derniers jours (inclus aujourd'hui, UTC). Les clés
@@ -109,10 +123,13 @@ export async function readUsage(keyLabel: string, days: number, now = new Date()
     for (const [field, raw] of Object.entries(hash)) {
       const sep = field.lastIndexOf('|')
       const series = field.slice(0, sep) // `${model}|${provider}`
-      const prop = FIELD_TO_PROP[field.slice(sep + 1)]
+      const metric = field.slice(sep + 1)
+      const micro = MICRO_FIELD_TO_PROP[metric]
+      const prop = micro ?? FIELD_TO_PROP[metric]
       if (!prop) continue
-      const v = Number(raw)
+      let v = Number(raw)
       if (!Number.isFinite(v)) continue
+      if (micro) v = microToUsd(v) // frontière de sortie : µ$ entiers -> USD
       report.totals[prop] += v
       ;(report.byModel[series] ??= zero())[prop] += v
       ;(report.byDay[day] ??= zero())[prop] += v

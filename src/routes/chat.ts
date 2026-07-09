@@ -104,10 +104,12 @@ chat.post('/v1/chat/completions', async (c) => {
   // est mutable : l'helper capture toujours le chemin courant/final.
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
-    if (rec.costUsd) rec.billedUsd = rec.costUsd * marginFactor
+    // P0-6 : != null, pas truthiness — un coût légitime de 0 doit produire billedUsd=0
+    // (facturé/métré), pas être escamoté comme absent.
+    if (rec.costUsd != null) rec.billedUsd = rec.costUsd * marginFactor
     recordRequest(rec)
     meterUsage(rec)
-    if (rec.billedUsd) noteLocalSpend(key, rec.billedUsd) // le plafond mord en dollars FACTURÉS
+    if (rec.billedUsd != null) noteLocalSpend(key, rec.billedUsd) // le plafond mord en dollars FACTURÉS
   }
 
   log.info('request', { key, model: decision.model, provider: provider.name, reason: decision.reason, stream: isStream, messages: req.messages.length })
@@ -222,6 +224,10 @@ chat.post('/v1/chat/completions', async (c) => {
     const scanner = new SseUsageScanner()
     let lastChunkAt = Date.now()
     let stalled = false
+    // P0-7 : garantit UNE observation au plus, quelle que soit la sortie (fin upstream
+    // ou cancel client) — l'ancien code n'enregistrait RIEN sur cancel, trou dans le
+    // signal bandit/metering.
+    let observed = false
 
     const watchdog = setInterval(() => {
       if (Date.now() - lastChunkAt > TIMEOUTS.interChunk) {
@@ -239,18 +245,24 @@ chat.post('/v1/chat/completions', async (c) => {
         if (done) {
           clearInterval(watchdog)
           controller.close()
+          // P0-8 : un stream tronqué mi-vol (scanner.errored via finish_reason 'error'
+          // ou objet error) est une ERREUR pour le bandit, pas une fin normale.
+          const errored = stalled || scanner.errored
           log.info('completed', {
-            key, model: decision.model, provider: scanner.provider, stream: true, stalled,
+            key, model: decision.model, provider: scanner.provider, stream: true, stalled, errored: scanner.errored,
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
-          record({
-            error: stalled,
-            promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
-            // le scanner lit le flux APRÈS la marge : on retrouve le coût brut
-            costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
-            durationMs: Date.now() - startedAt,
-          })
+          if (!observed) {
+            observed = true
+            record({
+              error: errored,
+              promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+              // le scanner lit le flux APRÈS la marge : on retrouve le coût brut
+              costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
+              durationMs: Date.now() - startedAt,
+            })
+          }
           return
         }
         controller.enqueue(value) // raw bytes to the client, untouched
@@ -263,6 +275,24 @@ chat.post('/v1/chat/completions', async (c) => {
         clearInterval(watchdog)
         call.abort.abort()
         reader.cancel(reason).catch(() => {})
+        // P0-7 : enregistrer l'observation PARTIELLE (usage scanné jusqu'ici) — sinon
+        // un cancel client laisse la requête invisible au bandit/metering. error:false :
+        // un désabonnement client n'est pas une panne du modèle. Le champ `aborted` du
+        // log distingue ce cas d'une fin normale (pas de champ RequestRecord dédié en
+        // v0 — décision E-4/decision-log ultérieure).
+        if (!observed) {
+          observed = true
+          log.info('completed', {
+            key, model: decision.model, provider: scanner.provider, stream: true, aborted: true,
+            promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+            cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
+          })
+          record({
+            promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+            costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
+            durationMs: Date.now() - startedAt,
+          })
+        }
       },
     })
 

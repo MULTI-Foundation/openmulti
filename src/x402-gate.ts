@@ -28,6 +28,7 @@ import { config } from './config.js'
 import { route } from './router.js'
 import { computeQuote } from './plan.js'
 import { addCredits } from './keys.js'
+import { microToUsd } from './micro-usd.js'
 import { log } from './log.js'
 import {
   KNOWN_NETWORKS, claimNonce, mintQuoteToken, paymentRequired, releaseNonce, usdToAtomic, verifyQuoteToken,
@@ -230,7 +231,10 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
     }
     requiredUsd = recomputed
   }
-  const paidUsd = Number(decoded.valueAtomic) / 1_000_000
+  // E-4 : les unités atomiques USDC SONT des micro-USD (6 décimales) — la conversion est
+  // exacte et le round-trip vers le ledger interne l'est aussi (usdToMicro(microToUsd(x)) = x),
+  // aucune perte flottante sur le chemin devis -> settlement -> crédit.
+  const paidUsd = microToUsd(Number(decoded.valueAtomic))
   if (BigInt(decoded.valueAtomic) < BigInt(usdToAtomic(requiredUsd))) {
     return c.json(err(`Payment too small: ${paidUsd} USD signed, quote max is ${requiredUsd} USD`, 'invalid_payment'), 402)
   }

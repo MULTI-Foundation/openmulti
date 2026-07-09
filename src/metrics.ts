@@ -158,8 +158,16 @@ export interface ModelAggregate {
 //     l'exploration côté select.ts (refresh continu, ~MIN_SAMPLES/WINDOW du trafic).
 // OPENMULTI_SMART_DECAY_WINDOW est l'horizon effectif en nombre de requêtes
 // (RHO = 1 - 1/window) ; 0 = pas d'amortissement (stats à vie, comportement legacy).
-const DECAY_WINDOW = Math.max(0, Number(process.env.OPENMULTI_SMART_DECAY_WINDOW ?? 200))
+export const DECAY_WINDOW = Math.max(0, Number(process.env.OPENMULTI_SMART_DECAY_WINDOW ?? 200))
 const RHO = DECAY_WINDOW > 0 ? 1 - 1 / DECAY_WINDOW : 1
+
+// P0-9 : jauge d'alerte « régime effondré » du bandit. Posée au boot par select.ts
+// quand MIN_SAMPLES >= DECAY_WINDOW (l'exploration ne se termine jamais : round-robin
+// pur, le gate de santé de la branche exploit n'est jamais atteint). 0 = sain.
+let banditCollapsedRegime = 0
+export function setBanditCollapsedRegime(collapsed: boolean): void {
+  banditCollapsedRegime = collapsed ? 1 : 0
+}
 
 // Clé : `${provider}␟${model}` — le bandit distingue les chemins d'accès (étape 4 :
 // arbitrer moonshot-direct vs openrouter pour un même modèle).
@@ -194,8 +202,9 @@ export function recordRequest(r: RequestRecord): void {
   if (r.error) s.errors += 1
   if (r.promptTokens) s.promptTokens += r.promptTokens
   if (r.completionTokens) s.completionTokens += r.completionTokens
-  if (r.costUsd) s.costUsd += r.costUsd
-  if (r.billedUsd) s.billedUsd += r.billedUsd
+  // P0-6 : != null, pas truthiness — un coût/facturé de 0 est une observation légitime.
+  if (r.costUsd != null) s.costUsd += r.costUsd
+  if (r.billedUsd != null) s.billedUsd += r.billedUsd
   if (typeof r.durationMs === 'number') {
     s.durationMsSum += r.durationMs
     s.durationCount += 1
@@ -300,6 +309,10 @@ export function renderProm(): string {
   out.push('# HELP openmulti_request_fields_stripped_total Request fields outside the upstream allowlist, removed before forwarding (OM-06).')
   out.push('# TYPE openmulti_request_fields_stripped_total counter')
   out.push(`openmulti_request_fields_stripped_total{} ${fieldsStripped}`)
+
+  out.push('# HELP openmulti_bandit_collapsed_regime Bandit misconfigured (MIN_SAMPLES >= DECAY_WINDOW): exploration never ends, health gate inert. 1 = collapsed.')
+  out.push('# TYPE openmulti_bandit_collapsed_regime gauge')
+  out.push(`openmulti_bandit_collapsed_regime{} ${banditCollapsedRegime}`)
 
   out.push('# HELP openmulti_path_fallback_total Requests that failed over to an alternate access path (same model).')
   out.push('# TYPE openmulti_path_fallback_total counter')

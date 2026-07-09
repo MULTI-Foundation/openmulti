@@ -51,16 +51,17 @@ function fakeClient() {
     async incr() {
       return 1
     },
-    // Émule le contrat du script ADD_CREDITS_LUA (keys.ts) : HSETNX de la ref puis
-    // HINCRBYFLOAT du crédit, en un pas. nil (null) si la ref existait déjà.
+    // Émule le contrat du script ADD_CREDITS_LUA (keys.ts) : HSETNX de la ref (montant
+    // USD, valeur d'audit) puis HINCRBY du crédit en micro-USD ENTIERS (E-4), en un pas.
+    // nil (null) si la ref existait déjà. Signature : [refField, usd, project, micro].
     async eval(_script: string, opts: { keys: string[]; arguments: string[] }) {
       const [refsKey, creditsKey] = opts.keys as [string, string]
-      const [refField, usd, project] = opts.arguments as [string, string, string]
+      const [refField, usd, project, micro] = opts.arguments as [string, string, string, string]
       const refs = hash(refsKey)
       if (refs.has(refField)) return null
       refs.set(refField, usd)
       const h = hash(creditsKey)
-      const total = Number(h.get(project) ?? 0) + Number(usd)
+      const total = Number(h.get(project) ?? 0) + Number(micro)
       h.set(project, String(total))
       return String(total)
     },
@@ -111,7 +112,8 @@ test('duplicate avec un montant DIFFÉRENT : ni crédité, ni montant de la ref 
   await admin('POST', '/admin/credits/acme', { usd: 10, ref: 'evt_a' })
   const res = await admin('POST', '/admin/credits/acme', { usd: 999, ref: 'evt_a' })
   assert.equal((await res.json()).duplicate, true)
-  assert.equal(client.store.get('credits:usd')?.get('acme'), '10')
+  // E-4 : le crédit vit désormais en micro-USD entiers (10 USD = 10_000_000 µ$).
+  assert.equal(client.store.get('credits:microusd')?.get('acme'), '10000000')
   assert.equal(client.store.get('credits:refs')?.get('acme|evt_a'), '10', 'montant de la ref réécrit')
 })
 
@@ -121,7 +123,7 @@ test('repli sans eval (fake historique) : idempotence conservée en deux temps',
   assert.equal((await res.json()).creditsUsd, 7)
   res = await admin('POST', '/admin/credits/acme', { usd: 7, ref: 'evt_f' })
   assert.equal((await res.json()).duplicate, true)
-  assert.equal(client.store.get('credits:usd')?.get('acme'), '7')
+  assert.equal(client.store.get('credits:microusd')?.get('acme'), '7000000') // 7 USD en µ$
 })
 
 test('le solde decompte le facture (x1.2) et bloque a zero avec 402', async () => {
