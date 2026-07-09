@@ -19,7 +19,8 @@ import { headerSafe } from '../sanitize.js'
 import { runCouncil } from '../council.js'
 import { computeQuote } from '../plan.js'
 import { PRICING_TABLE_VERSION } from '../pricing.js'
-import { chatQuoteDigest, checkPinnedProgramStage, checkPinnedQuote, decodeQuoteToken, stripQuoteToken, type QuoteTokenClaims, type StageInputMeasure } from '../quote-token.js'
+import { chatQuoteDigest, checkPinnedProgramStage, checkPinnedQuote, decodeQuoteToken, stripQuoteToken, type QuoteTokenClaims } from '../quote-token.js'
+import { measureStageInput } from '../stage-input-guard.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
@@ -133,13 +134,10 @@ chat.post('/v1/chat/completions', async (c) => {
     const q = computeQuote(exec, decision.model, decision.maxTokensCeiling, marginFactor)
     if (pin.kind === 'program') {
       // Exécution ÉTAGÉE : chaque étage rejoue le MÊME jeton avec openmulti.quote_stage.
-      // E-8 (AX-CHAIN) : la garde pré-spend mesure l'entrée réelle de l'étage. Mesure
-      // CONSERVATRICE par borne octets ici (jamais optimiste) ; le tokenizer du provider
-      // (mesure serrée) arrive dans la tranche stage-input-guard.
-      const realInput: StageInputMeasure = {
-        tokens: Buffer.byteLength(JSON.stringify(exec), 'utf8'),
-        method: 'byte_bound',
-      }
+      // E-8 (AX-CHAIN) : la garde pré-spend mesure l'entrée réelle de l'étage — tokenizer
+      // du provider si un pont est configuré (mesure serrée), sinon repli borne OCTETS
+      // conservateur (jamais optimiste ; cf stage-input-guard.ts).
+      const realInput = await measureStageInput(exec, decision.model)
       const contract = checkPinnedProgramStage({
         claims: pin,
         stage: req.openmulti?.quote_stage,

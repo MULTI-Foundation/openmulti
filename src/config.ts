@@ -158,6 +158,14 @@ export const config = {
     secret: process.env.OPENMULTI_QUOTE_TOKEN_SECRET || '',
     ttlS: Math.max(30, Number(process.env.OPENMULTI_QUOTE_TOKEN_TTL_S ?? 300)),
   },
+  // E-8 : pont tokenizer optionnel pour la garde pré-spend par étage (mesure serrée du
+  // compte de tokens d'entrée réel vs la borne octets conservatrice). VIDE = repli borne
+  // octets (déjà sound). Commande recevant {"model","text"} sur stdin, rendant
+  // {"tokens":<n>} sur stdout (réf: axiom-harness/bridge/count_tokens.py).
+  stageInputGuard: {
+    bridgeCmd: process.env.OPENMULTI_TOKENIZER_BRIDGE_CMD || '',
+    bridgeTimeoutMs: Math.max(1000, Number(process.env.OPENMULTI_TOKENIZER_BRIDGE_TIMEOUT_MS ?? 15_000)),
+  },
   // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
   // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que
   // l'agent puisse tendre un lien de paiement à son humain. Vide = pas d'URL.
