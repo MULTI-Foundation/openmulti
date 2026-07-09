@@ -15,10 +15,12 @@ process.env.OPENMULTI_MODEL_ECONOMY = 'deepseek/deepseek-chat'
 
 let app: { fetch: (req: Request) => Promise<Response> }
 let computeQuote: typeof import('../src/plan.ts').computeQuote
+let pricedModelIds: typeof import('../src/pricing.ts').pricedModelIds
 
 before(async () => {
   ;({ app } = await import('../src/app.ts'))
   ;({ computeQuote } = await import('../src/plan.ts'))
+  ;({ pricedModelIds } = await import('../src/pricing.ts'))
 })
 
 function post(body: unknown, key = 'sk_plan_test') {
@@ -201,6 +203,24 @@ test('computeQuote: un modèle NON-tiered/thinking reste quotable (pas de refus 
   const r = computeQuote(req as never, 'deepseek/deepseek-chat', undefined, 1)
   assert.ok(r.quote, 'deepseek-chat doit rester quotable')
   assert.equal(r.unavailable, undefined)
+})
+
+// ── P0-2 : verrou de l'axiome byte-BPE (≤1 token/octet) sur les modèles quotables ──
+// L'axiome fonde la borne d'entrée (octets UTF-8 = majorant du compte de tokens). Il est
+// VALIDÉ pour la famille tiktoken (o200k/cl100k) mais VIOLÉ pour Qwen (BBPE ~1.33 tok/octet)
+// — un devis « garanti » sur Qwen sous-estimerait l'entrée. Mitigation : Qwen tout entier
+// est refusé (flag tiered, P0-1). Ce test lie les deux : si un Qwen redevenait quotable
+// (flag perdu), la borne-octets sous-estimerait à nouveau -> régression P0-2 rattrapée ici.
+
+test('P0-2: aucun modèle Qwen (axiome ≤1 tok/octet VIOLÉ) n\'émet de devis garanti', () => {
+  const req = { messages: MSGS, max_tokens: 100 }
+  const qwen = pricedModelIds().filter((m) => m.startsWith('qwen/'))
+  assert.ok(qwen.length >= 8, `les modèles qwen doivent être dans la table (vu ${qwen.length})`)
+  for (const m of qwen) {
+    const r = computeQuote(req as never, m, undefined, 1)
+    assert.equal(r.quote, null, `${m} ne doit pas émettre de devis garanti (borne-octets non sûre)`)
+    assert.equal(r.unavailable, 'pricing_tiered', m)
+  }
 })
 
 test('/v1/plan: un modèle thinking épinglé -> 200 sans quote + quote_unavailable', async () => {
