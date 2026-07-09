@@ -14,11 +14,23 @@
 //     câblage (règle projet : ne rien affirmer sans vérifier — un prix inventé ici
 //     serait exactement ça).
 
+import { createHash } from 'node:crypto'
+
 export interface ModelPrice {
   /** USD par million de tokens d'entrée. */
   inputPerMTok: number
   /** USD par million de tokens de sortie. */
   outputPerMTok: number
+  /** Tarification par PALIER de contexte et/ou taux thinking : la table porte le palier
+   * de base, qui est une borne BASSE (gros contexte ou thinking = plus cher). La
+   * facturation reste best-effort sur ce prix ; le devis (computeQuote) REFUSE ces
+   * modèles — un devis « garanti » ne peut pas s'appuyer sur une borne basse (P0-1).
+   * Retirer le flag seulement avec un prix vérifié constant sur tous les paliers. */
+  tiered?: true
+  /** Sortie facturée dépendant d'un toggle THINKING non décidable statiquement depuis la
+   * requête (ENVELOPE §3 AX-OUT classe C, deltas E1/E2) : le cap de sortie ne majore pas
+   * la CoT facturée. Facturation best-effort au taux de base ; le devis REFUSE (Q-1). */
+  thinking?: true
 }
 
 // Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
@@ -138,7 +150,13 @@ export function buildPricing(defaults: Record<string, ModelPrice>, overrideJson?
     }
     for (const [model, price] of Object.entries(parsed)) {
       if (isValidPrice(price)) {
-        prices[model] = { inputPerMTok: price.inputPerMTok, outputPerMTok: price.outputPerMTok }
+        prices[model] = {
+          inputPerMTok: price.inputPerMTok,
+          outputPerMTok: price.outputPerMTok,
+          // Un override peut marquer un modèle tiered/thinking (refus de devis) sans release.
+          ...(price.tiered ? { tiered: true } : {}),
+          ...(price.thinking ? { thinking: true } : {}),
+        }
       } else {
         invalid.push(model)
       }
@@ -151,6 +169,14 @@ const registry = buildPricing(DEFAULTS, process.env.OPENMULTI_PRICING_JSON)
 
 /** Entrées d'override rejetées au boot (loggées par l'appelant au câblage, étape 3). */
 export const pricingInvalid: readonly string[] = registry.invalid
+
+/** Version (hash court) de la table EFFECTIVE (defaults + override env) — épinglée dans
+ * le jeton de devis (E-1) : à l'exécution, une table qui a dérivé depuis le devis est
+ * détectable (le contrat programme la refuse, le contrat chat recalcule la borne). */
+export const PRICING_TABLE_VERSION: string = createHash('sha256')
+  .update(JSON.stringify(registry.prices))
+  .digest('hex')
+  .slice(0, 12)
 
 export function priceFor(model: string): ModelPrice | undefined {
   return registry.prices[model]

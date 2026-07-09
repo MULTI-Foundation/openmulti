@@ -18,6 +18,13 @@ export interface OpenMultiExtension {
   /** Council / fusion (mixture-of-agents) — opt-in. Présent = la requête est délibérée
    * par un panel puis synthétisée (cf council.ts). Coûteux (N+1 ou 2N+1 appels). */
   council?: CouncilRequest
+  /** E-1 (quote-pin) : jeton de devis signé émis par /v1/plan. Présent = la requête
+   * s'exécute SOUS CONTRAT (borne recalculée <= montant quoté, sinon 409). Opaque à
+   * l'appelant, retiré avant le forward (n'atteint jamais le provider). */
+  quote_token?: string
+  /** E-1 (programme) : index PLAT de l'étage couvert par un jeton kind=program rejoué
+   * par le runtime multi-lang sur chaque appel d'étage. */
+  quote_stage?: number
 }
 
 /** Configuration de la délibération council (toutes optionnelles : presets/défauts). */
@@ -63,6 +70,11 @@ export interface RouteDecision {
   reason: string
   /** OM-01: optional per-tier ceiling on max_tokens to bound unit cost (0/undef = none). */
   maxTokensCeiling?: number
+  /** E-1 (quote-pin) : le SNAPSHOT de candidats considéré pour cette décision (l'ensemble
+   * résolu du tier, ou [model] pour un pin/id concret/image). C'est le matériau du jeton
+   * de devis (le pin est un ensemble, jamais un modèle imposé) et la contrainte que le
+   * vérificateur du jeton applique (le modèle résolu doit y rester). */
+  candidates?: string[]
 }
 
 /** Hono environment: the auth middleware stashes the calling project's API key here. */
