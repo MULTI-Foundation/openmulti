@@ -19,6 +19,7 @@ import { route } from '../router.js'
 import { providerFor } from '../providers/index.js'
 import { computeQuote } from '../plan.js'
 import { computeProgramQuote, validateProgram } from '../program-quote.js'
+import { computeCouncilQuote } from '../council-quote.js'
 import { chatQuoteDigest, issueQuoteToken, programQuoteDigest } from '../quote-token.js'
 import { PRICING_TABLE_VERSION } from '../pricing.js'
 import { marginFor } from '../keys.js'
@@ -111,10 +112,24 @@ plan.post('/v1/plan', async (c) => {
   if (!Array.isArray(req.messages)) {
     return c.json({ error: { message: '`messages` is required', type: 'invalid_request_error' } }, 400)
   }
-  // Le council fan-out N+1 appels : son devis agrégé (E-5) arrive dans une tranche
-  // ultérieure — refus explicite pour l'instant plutôt qu'un devis faux.
+  // Council (E-5) : devis agrégé = Σ des bornes des N+1 (fuse) / 2N+1 (deliberate)
+  // sous-appels, dérivées du panel/chair résolus et des caps de sortie par appel.
   if (req.openmulti?.council || req.model === 'council') {
-    return c.json({ error: { message: 'plan does not support council requests', type: 'invalid_request_error' } }, 400)
+    const marginFactor = 1 + marginFor(key) / 100
+    const cq = computeCouncilQuote(req, marginFactor)
+    if ('error' in cq) {
+      return c.json({ error: { message: cq.error, type: 'invalid_request_error' } }, 400)
+    }
+    log.info('plan', { key, model: 'council', provider: 'council', maxCostUsd: cq.quote?.max_cost_usd, unavailable: cq.unavailable })
+    return c.json({
+      object: 'plan',
+      model: 'council',
+      provider: 'council',
+      reason: cq.reason,
+      quote: cq.quote,
+      ...(cq.unavailable ? { quote_unavailable: cq.unavailable } : {}),
+      council: { mode: cq.mode, panel: cq.panel, chair: cq.chair, calls: cq.calls },
+    })
   }
 
   const decision = route(req)

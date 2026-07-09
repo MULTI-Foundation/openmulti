@@ -84,7 +84,7 @@ export interface CouncilOutput {
 
 /** Sous-requête chat « propre » (sans openmulti -> anti-récursion : un membre de panel
  * ne peut pas relancer un council). */
-function subRequest(model: string, messages: unknown[], req: ChatRequest): ChatRequest {
+export function subRequest(model: string, messages: unknown[], req: ChatRequest): ChatRequest {
   const sub: ChatRequest = { model, messages: messages as ChatRequest['messages'] }
   if (typeof req.max_tokens === 'number') sub.max_tokens = req.max_tokens
   if (typeof req.temperature === 'number') sub.temperature = req.temperature
