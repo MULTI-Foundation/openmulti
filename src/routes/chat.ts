@@ -17,6 +17,9 @@ import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marg
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import { runCouncil } from '../council.js'
+import { computeQuote } from '../plan.js'
+import { PRICING_TABLE_VERSION } from '../pricing.js'
+import { chatQuoteDigest, checkPinnedProgramStage, checkPinnedQuote, decodeQuoteToken, stripQuoteToken, type QuoteTokenClaims, type StageInputMeasure } from '../quote-token.js'
 import type { AppEnv, ChatRequest } from '../types.js'
 
 export const chat = new Hono<AppEnv>()
@@ -74,6 +77,26 @@ chat.post('/v1/chat/completions', async (c) => {
     return c.json({ error: { message: '`messages` is required', type: 'invalid_request_error' } }, 400)
   }
 
+  // E-1 (quote-pin) : un jeton de devis présenté fait du devis un CONTRAT d'exécution.
+  // Décodé ICI (signature + expiration -> 422 structuré) ; le digest, la contrainte de
+  // candidats et la borne recalculée sont vérifiés APRÈS le routage, AVANT tout appel
+  // upstream (jamais un refus après dépense). Fail-closed : secret absent = refus.
+  let pin: QuoteTokenClaims | undefined
+  if (req.openmulti && req.openmulti.quote_token !== undefined) {
+    const token = req.openmulti.quote_token
+    if (typeof token !== 'string' || req.openmulti.council || req.model === 'council') {
+      return c.json({ error: { message: 'openmulti.quote_token must be a string on a plain (non-council) chat request', type: 'invalid_quote_token', code: 'malformed' } }, 422)
+    }
+    if (!config.quoteToken.secret) {
+      return c.json({ error: { message: 'quote tokens are not enabled on this gateway (OPENMULTI_QUOTE_TOKEN_SECRET unset)', type: 'invalid_quote_token', code: 'not_enabled' } }, 422)
+    }
+    const verdict = decodeQuoteToken(token, config.quoteToken.secret)
+    if (!verdict.valid) {
+      return c.json({ error: { message: `invalid quote token (${verdict.reason}) — request a fresh quote from /v1/plan`, type: 'invalid_quote_token', code: verdict.reason } }, 422)
+    }
+    pin = verdict.claims
+  }
+
   // Council / fusion (mixture-of-agents) — opt-in, NON-STREAM (MVP). L'orchestrateur
   // fan-out le panel via le routing interne (chemins directs + bandit) puis synthétise ;
   // chaque sous-appel s'enregistre lui-même (bandit/metering/caps), le coût agrégé est
@@ -86,7 +109,9 @@ chat.post('/v1/chat/completions', async (c) => {
     return c.json(body, status as 200)
   }
 
-  const decision = route(req)
+  // E-1 : le routage sous contrat est CONTRAINT au snapshot de candidats du devis —
+  // la sélection (default/smart) tourne normalement, DANS le snapshot (router.ts).
+  const decision = route(req, pin?.candidates)
   // Chemins d'accès ordonnés : l'élu d'abord, puis les alternatives de fallback
   // (même modèle — la réponse est préservée ; cf providers/index.ts pathsFor).
   const paths = pathsFor(decision.model)
@@ -98,6 +123,51 @@ chat.post('/v1/chat/completions', async (c) => {
   // (marge 0) = passthrough byte-identique, donc le contrat MyMULTI tient par
   // construction. Le bandit, lui, reste sur le coût BRUT (costUsd).
   const marginFactor = 1 + marginFor(key) / 100
+
+  // E-1 : le fond du contrat — digest, appartenance au snapshot, et borne RECALCULÉE
+  // sous la table de prix et la marge COURANTES (jamais celles du jeton) : une dérive
+  // prix/marge/routage qui ferait dépasser le montant quoté est un 409 structuré AVANT
+  // toute dépense (la fenêtre TOCTOU devis->run est fermée ici).
+  if (pin) {
+    const exec = stripQuoteToken(req) // le jeton n'entre ni dans le digest ni dans la borne
+    const q = computeQuote(exec, decision.model, decision.maxTokensCeiling, marginFactor)
+    if (pin.kind === 'program') {
+      // Exécution ÉTAGÉE : chaque étage rejoue le MÊME jeton avec openmulti.quote_stage.
+      // E-8 (AX-CHAIN) : la garde pré-spend mesure l'entrée réelle de l'étage. Mesure
+      // CONSERVATRICE par borne octets ici (jamais optimiste) ; le tokenizer du provider
+      // (mesure serrée) arrive dans la tranche stage-input-guard.
+      const realInput: StageInputMeasure = {
+        tokens: Buffer.byteLength(JSON.stringify(exec), 'utf8'),
+        method: 'byte_bound',
+      }
+      const contract = checkPinnedProgramStage({
+        claims: pin,
+        stage: req.openmulti?.quote_stage,
+        resolvedModel: decision.model,
+        currentOutputMax: q.quote?.output_tokens_max,
+        marginFactor,
+        tableVersion: PRICING_TABLE_VERSION,
+        realInput,
+      })
+      if (!contract.ok) {
+        log.warn('quote_pin_rejected', { key, code: contract.code, model: decision.model, stage: String(req.openmulti?.quote_stage), realInputTokens: realInput.tokens, realInputMethod: realInput.method })
+        const type = contract.status === 422 ? 'invalid_quote_token' : 'quote_conflict'
+        return c.json({ error: { message: contract.message, type, code: contract.code } }, contract.status)
+      }
+    } else {
+      const contract = checkPinnedQuote({
+        claims: pin,
+        digest: chatQuoteDigest(exec),
+        resolvedModel: decision.model,
+        currentBoundUsd: q.quote?.max_cost_usd,
+        tableVersion: PRICING_TABLE_VERSION,
+      })
+      if (!contract.ok) {
+        log.warn('quote_pin_rejected', { key, code: contract.code, model: decision.model })
+        return c.json({ error: { message: contract.message, type: 'quote_conflict', code: contract.code } }, contract.status)
+      }
+    }
+  }
 
   // Une observation = deux écritures : Prometheus (monitoring, in-memory) et le
   // metering durable (facturation, Redis, fire-and-forget — cf meter.ts). `provider`
