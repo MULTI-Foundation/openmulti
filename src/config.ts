@@ -150,6 +150,14 @@ export const config = {
     cdpApiKeyId: process.env.CDP_API_KEY_ID || '',
     cdpApiKeySecret: process.env.CDP_API_KEY_SECRET || '',
   },
+  // E-1 (quote-pin) : secret HMAC dédié pour signer les jetons de devis émis par
+  // /v1/plan. VIDE = pas d'émission ET pas de vérification (le devis reste informatif,
+  // le contrat est désactivé) — jamais un HMAC sur '' (issueQuoteToken refuse). TTL du
+  // jeton en secondes (fenêtre devis->run).
+  quoteToken: {
+    secret: process.env.OPENMULTI_QUOTE_TOKEN_SECRET || '',
+    ttlS: Math.max(30, Number(process.env.OPENMULTI_QUOTE_TOKEN_TTL_S ?? 300)),
+  },
   // Lien de recharge PUBLIC (page console "payer pour un projet"), template avec
   // {project}. Exposé dans GET /v1/balance et les 402 insufficient_credits pour que
   // l'agent puisse tendre un lien de paiement à son humain. Vide = pas d'URL.

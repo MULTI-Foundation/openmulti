@@ -25,6 +25,12 @@ export interface OpenMultiExtension {
   /** E-1 (programme) : index PLAT de l'étage couvert par un jeton kind=program rejoué
    * par le runtime multi-lang sur chaque appel d'étage. */
   quote_stage?: number
+  /** WS2 : AST MULTI complet (forme gelée §3.6) soumis à /v1/plan pour un devis
+   * PROGRAMME (borne pipeline entier). Validé par validateProgram (jamais de confiance). */
+  program?: unknown
+  /** Borne d'octets du stdin du run programme — absent = les étages qui lisent stdin
+   * sont quotés à vide et marqués guaranteed=false. */
+  stdin_bytes?: number
 }
 
 /** Configuration de la délibération council (toutes optionnelles : presets/défauts). */
