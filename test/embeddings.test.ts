@@ -10,6 +10,7 @@ process.env.OPENROUTER_API_KEY ||= 'test-upstream-key'
 process.env.OPENMULTI_API_KEYS = 'sk_emb_test'
 process.env.OPENMULTI_MODEL_EMBEDDING = 'openai/text-embedding-3-small'
 process.env.OPENMULTI_MAX_RETRIES = '1'
+process.env.OPENMULTI_MAX_BODY_BYTES = '100000' // P0-5 : assez pour les corps normaux
 
 const KEY = 'sk_emb_test'
 const { app } = await import('../src/app.ts')
@@ -82,6 +83,51 @@ test('usage enregistre dans les metriques (tokens + cout)', async () => {
   const prom = renderProm()
   assert.match(prom, /openmulti_requests_total\{key="emb",model="openai\/text-embedding-3-small",provider="openrouter"\} 1\b/)
   assert.match(prom, /openmulti_tokens_total\{key="emb",model="openai\/text-embedding-3-small",provider="openrouter",kind="prompt"\} 7\b/)
+})
+
+test('P0-5 : body au-dela de la limite avec Content-Length absent -> 413 par re-mesure du handler', async () => {
+  // Body streame (ReadableStream) => aucun Content-Length => le middleware app.ts laisse
+  // passer ; c'est la re-mesure du handler (repliquee de chat.ts) qui doit trancher. Sans
+  // le fix P0-5, le body geant partait a l'upstream, contournant la limite.
+  lastUrl = ''
+  const bodyStr = JSON.stringify({ model: 'auto', input: 'x'.repeat(150_000) })
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(bodyStr))
+      controller.close()
+    },
+  })
+  const res = await app.fetch(
+    new Request('http://test/v1/embeddings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: stream,
+      // @ts-expect-error duplex requis par undici pour un body en flux
+      duplex: 'half',
+    }),
+  )
+  assert.equal(res.status, 413)
+  assert.equal(lastUrl, '', 'aucun appel upstream sur un body trop gros')
+})
+
+test('P0-5 : sans Content-Length, un body normal streame passe (le handler ne sur-rejette pas)', async () => {
+  const bodyStr = JSON.stringify({ model: 'auto', input: 'hello' })
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(bodyStr))
+      controller.close()
+    },
+  })
+  const res = await app.fetch(
+    new Request('http://test/v1/embeddings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: stream,
+      // @ts-expect-error duplex requis par undici pour un body en flux
+      duplex: 'half',
+    }),
+  )
+  assert.equal(res.status, 200)
 })
 
 test('panne transitoire -> retry puis succes ; erreur deterministe relayee telle quelle', async () => {

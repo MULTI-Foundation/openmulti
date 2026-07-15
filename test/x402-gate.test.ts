@@ -45,13 +45,15 @@ function fakeStore() {
     async set(k: string, v: string) { kv.set(k, v) },
     async del(k: string) { kv.delete(k); counters.delete(k) },
     async eval(_s: string, opts: { keys: string[]; arguments: string[] }) {
+      // E-4 : signature [refField, usd, project, micro] — la ref garde le montant USD
+      // (audit), le crédit s'incrémente en micro-USD entiers.
       const [refsKey, creditsKey] = opts.keys as [string, string]
-      const [refField, usd, project] = opts.arguments as [string, string, string]
+      const [refField, usd, project, micro] = opts.arguments as [string, string, string, string]
       const refs = hash(refsKey)
       if (refs.has(refField)) return null
       refs.set(refField, usd)
       const h = hash(creditsKey)
-      const total = Number(h.get(project) ?? 0) + Number(usd)
+      const total = Number(h.get(project) ?? 0) + Number(micro)
       h.set(project, String(total))
       return String(total)
     },
@@ -180,8 +182,9 @@ test('parcours payé complet : verify+settle, crédit wallet, exécution, reçu,
   assert.equal(receipt.transaction, '0xTxHash')
   // crédit du projet wallet = montant payé, ref idempotente au tx hash
   const project = walletProject('0xPayerAddr')
-  const credited = Number(store.hashes.get('credits:usd')?.get(project))
-  assert.equal(credited, Number(atomic) / 1e6)
+  // E-4 : crédit en micro-USD entiers ; les unités atomiques USDC SONT des µ$ (round-trip exact).
+  const credited = Number(store.hashes.get('credits:microusd')?.get(project))
+  assert.equal(credited, Number(atomic))
   assert.ok(store.hashes.get('credits:refs')?.has(`${project}|x402:0xTxHash`))
   // le corps de réponse est l'upstream, inchangé
   const body = await res.json()
@@ -237,7 +240,7 @@ test('settle échoué : 402, nonce relâché, rien crédité', async () => {
   const res = await post({ 'x-payment': paymentHeader(atomic, '0xn3'), 'x-openmulti-quote': token })
   assert.equal(res.status, 402)
   assert.match((await res.json()).error.message, /settlement failed/)
-  assert.equal(store.hashes.get('credits:usd'), undefined)
+  assert.equal(store.hashes.get('credits:microusd'), undefined)
   facil.settleOk = true
   assert.equal((await post({ 'x-payment': paymentHeader(atomic, '0xn3'), 'x-openmulti-quote': token })).status, 200)
 })

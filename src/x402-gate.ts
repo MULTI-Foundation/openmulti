@@ -27,7 +27,10 @@ import type { MiddlewareHandler } from 'hono'
 import { config } from './config.js'
 import { route } from './router.js'
 import { computeQuote } from './plan.js'
+import { PRICING_TABLE_VERSION } from './pricing.js'
+import { chatQuoteDigest, checkPinnedQuote, decodeQuoteToken, stripQuoteToken } from './quote-token.js'
 import { addCredits } from './keys.js'
+import { microToUsd } from './micro-usd.js'
 import { log } from './log.js'
 import {
   KNOWN_NETWORKS, claimNonce, mintQuoteToken, paymentRequired, releaseNonce, usdToAtomic, verifyQuoteToken,
@@ -219,10 +222,31 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
   // signé doit couvrir le max.
   let requiredUsd: number
   const quoteHeader = c.req.header('x-openmulti-quote')
+  const isCouncil = Boolean(req.openmulti?.council) || req.model === 'council'
+  const pinToken = !isCouncil && typeof req.openmulti?.quote_token === 'string' ? req.openmulti.quote_token : undefined
   if (quoteHeader) {
     const v = verifyQuoteToken(quoteHeader, requestHash, config.x402.quoteSecret)
     if (!v.valid) return c.json(err(`Invalid quote token (${v.reason}) — request a fresh 402 quote`, 'invalid_payment'), 402)
     requiredUsd = v.claims.maxUsd
+  } else if (pinToken && config.quoteToken.secret) {
+    // E-1 sur le rail x402 : le paiement doit couvrir le montant QUOTÉ du jeton, et le
+    // CONTRAT (digest, snapshot de candidats, borne recalculée sous table+marge
+    // courantes) est PRÉ-VÉRIFIÉ ICI — un contrat mort (dérive) est un 409 AVANT tout
+    // verify/settle : l'argent ne bouge jamais sur un devis dépassé.
+    const v = decodeQuoteToken(pinToken, config.quoteToken.secret)
+    if (!v.valid) return c.json(err(`Invalid quote token (${v.reason}) — request a fresh quote from /v1/plan`, 'invalid_payment'), 402)
+    const exec = stripQuoteToken(req)
+    const decision = route(exec, v.claims.candidates)
+    const q = computeQuote(exec, decision.model, decision.maxTokensCeiling, 1 + config.marginPct / 100)
+    const contract = checkPinnedQuote({
+      claims: v.claims,
+      digest: chatQuoteDigest(exec),
+      resolvedModel: decision.model,
+      currentBoundUsd: q.quote?.max_cost_usd,
+      tableVersion: PRICING_TABLE_VERSION,
+    })
+    if (!contract.ok) return c.json({ error: { message: contract.message, type: 'quote_conflict', code: contract.code } }, 409)
+    requiredUsd = v.claims.usd
   } else {
     const recomputed = quoteUsd(req)
     if (recomputed === undefined) {
@@ -230,7 +254,10 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
     }
     requiredUsd = recomputed
   }
-  const paidUsd = Number(decoded.valueAtomic) / 1_000_000
+  // E-4 : les unités atomiques USDC SONT des micro-USD (6 décimales) — la conversion est
+  // exacte et le round-trip vers le ledger interne l'est aussi (usdToMicro(microToUsd(x)) = x),
+  // aucune perte flottante sur le chemin devis -> settlement -> crédit.
+  const paidUsd = microToUsd(Number(decoded.valueAtomic))
   if (BigInt(decoded.valueAtomic) < BigInt(usdToAtomic(requiredUsd))) {
     return c.json(err(`Payment too small: ${paidUsd} USD signed, quote max is ${requiredUsd} USD`, 'invalid_payment'), 402)
   }

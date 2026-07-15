@@ -228,3 +228,37 @@ test('e2e stream: SSE Anthropic re-encode en SSE OpenAI, cost dans le dernier ch
   assert.equal(JSON.parse(usageLine.slice(6)).usage.cost, 10.5)
   assert.ok(text.trimEnd().endsWith('data: [DONE]'), '[DONE] final manquant')
 })
+
+test('P0-8 e2e stream: une erreur de lecture mi-stream -> finish_reason error + objet error (pas une fin normale)', async () => {
+  const head = [
+    'event: message_start',
+    'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":0}}}',
+    '',
+    'event: content_block_start',
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+    '',
+    'event: content_block_delta',
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}',
+    '',
+    '',
+  ].join('\n')
+  mockResponse = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(head))
+          controller.error(new Error('upstream reset mid-stream')) // troncature en vol
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )
+
+  const res = await post({ model: 'anthropic/claude-sonnet-4-6', stream: true, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  const text = await res.text()
+  // avant le fix : le catch -> done:true rendait une fin d'apparence normale, indiscernable.
+  assert.match(text, /"finish_reason":"error"/, 'finish_reason error manquant sur un stream tronque')
+  const errLine = text.split('\n').find((l) => l.startsWith('data:') && l.includes('"error"'))
+  assert.ok(errLine, 'objet error manquant dans le chunk final')
+  assert.ok(text.trimEnd().endsWith('data: [DONE]'), '[DONE] final present')
+})

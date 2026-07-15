@@ -35,6 +35,24 @@ test('[DONE] et lignes non-data sont ignores sans casser', () => {
   assert.equal(s.provider, null)
 })
 
+test('P0-8 : errored passe a true sur un objet error OU un finish_reason error', () => {
+  const s1 = new SseUsageScanner()
+  s1.push('data: {"choices":[{"delta":{"content":"hi"}}]}\n')
+  assert.equal(s1.errored, false)
+  s1.push('data: {"error":{"message":"upstream stream truncated"}}\n')
+  assert.equal(s1.errored, true)
+
+  const s2 = new SseUsageScanner()
+  s2.push('data: {"choices":[{"index":0,"finish_reason":"error"}],"usage":{}}\n')
+  assert.equal(s2.errored, true)
+
+  // fin normale : jamais errored
+  const s3 = new SseUsageScanner()
+  s3.push('data: {"choices":[{"finish_reason":"stop"}]}\n')
+  s3.push('data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0.01}}\n')
+  assert.equal(s3.errored, false)
+})
+
 test('injectCost: enrichit uniquement l\'event usage sans cost, laisse tout le reste', () => {
   const cb = () => 2.5
   // injecte la ou il faut

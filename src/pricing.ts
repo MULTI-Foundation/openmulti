@@ -14,11 +14,23 @@
 //     câblage (règle projet : ne rien affirmer sans vérifier — un prix inventé ici
 //     serait exactement ça).
 
+import { createHash } from 'node:crypto'
+
 export interface ModelPrice {
   /** USD par million de tokens d'entrée. */
   inputPerMTok: number
   /** USD par million de tokens de sortie. */
   outputPerMTok: number
+  /** Tarification par PALIER de contexte et/ou taux thinking : la table porte le palier
+   * de base, qui est une borne BASSE (gros contexte ou thinking = plus cher). La
+   * facturation reste best-effort sur ce prix ; le devis (computeQuote) REFUSE ces
+   * modèles — un devis « garanti » ne peut pas s'appuyer sur une borne basse (P0-1).
+   * Retirer le flag seulement avec un prix vérifié constant sur tous les paliers. */
+  tiered?: true
+  /** Sortie facturée dépendant d'un toggle THINKING non décidable statiquement depuis la
+   * requête (ENVELOPE §3 AX-OUT classe C, deltas E1/E2) : le cap de sortie ne majore pas
+   * la CoT facturée. Facturation best-effort au taux de base ; le devis REFUSE (Q-1). */
+  thinking?: true
 }
 
 // Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
@@ -46,7 +58,9 @@ const DEFAULTS: Record<string, ModelPrice> = {
   // DeepSeek direct — vérifié le 2026-06-22 sur api-docs.deepseek.com/quick_start/pricing
   // (prix = cache MISS). deepseek-chat/-reasoner mappent v4-flash.
   'deepseek/deepseek-chat': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
-  'deepseek/deepseek-reasoner': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
+  // reasoner : la sortie facturée inclut la CoT (thinking), non bornée par le cap de
+  // sortie demandé → non quotable (Q-1), même prix best-effort pour la facturation.
+  'deepseek/deepseek-reasoner': { inputPerMTok: 0.14, outputPerMTok: 0.28, thinking: true },
   'deepseek/deepseek-v4-flash': { inputPerMTok: 0.14, outputPerMTok: 0.28 },
   'deepseek/deepseek-v4-pro': { inputPerMTok: 0.435, outputPerMTok: 0.87 },
 
@@ -71,14 +85,17 @@ const DEFAULTS: Record<string, ModelPrice> = {
   // PAR PALIER de contexte : on prend le palier de base (borne basse pour les gros
   // contextes). qwen-plus : output = tarif NON-thinking (le thinking, plus cher, n'est
   // pas activé par ce câblage de base).
-  'qwen/qwen3-max': { inputPerMTok: 1.2, outputPerMTok: 6 },
-  'qwen/qwen-max': { inputPerMTok: 1.6, outputPerMTok: 6.4 },
-  'qwen/qwen-plus': { inputPerMTok: 0.4, outputPerMTok: 1.2 },
-  'qwen/qwen-flash': { inputPerMTok: 0.05, outputPerMTok: 0.4 },
-  'qwen/qwen3.5-plus': { inputPerMTok: 0.4, outputPerMTok: 2.4 },
-  'qwen/qwen3.5-flash': { inputPerMTok: 0.1, outputPerMTok: 0.4 },
-  'qwen/qwen-turbo': { inputPerMTok: 0.05, outputPerMTok: 0.2 },
-  'qwen/qwen3-235b-a22b': { inputPerMTok: 0.7, outputPerMTok: 2.8 },
+  // tiered : la table porte le PALIER DE BASE de contexte (borne basse) — un gros
+  // contexte facture plus, donc pas de devis garanti dessus (P0-1) ; le prix de base
+  // reste utilisé pour la facturation best-effort.
+  'qwen/qwen3-max': { inputPerMTok: 1.2, outputPerMTok: 6, tiered: true },
+  'qwen/qwen-max': { inputPerMTok: 1.6, outputPerMTok: 6.4, tiered: true },
+  'qwen/qwen-plus': { inputPerMTok: 0.4, outputPerMTok: 1.2, tiered: true },
+  'qwen/qwen-flash': { inputPerMTok: 0.05, outputPerMTok: 0.4, tiered: true },
+  'qwen/qwen3.5-plus': { inputPerMTok: 0.4, outputPerMTok: 2.4, tiered: true },
+  'qwen/qwen3.5-flash': { inputPerMTok: 0.1, outputPerMTok: 0.4, tiered: true },
+  'qwen/qwen-turbo': { inputPerMTok: 0.05, outputPerMTok: 0.2, tiered: true },
+  'qwen/qwen3-235b-a22b': { inputPerMTok: 0.7, outputPerMTok: 2.8, tiered: true },
 
   // Anthropic direct — vérifié le 2026-06-23 via la référence officielle (claude-api).
   // Input = plein tarif (le cache hit, ~0.1x, n'est pas modélisé → borne haute).
@@ -99,8 +116,8 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
   'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
   'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
-  'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25 },
-  'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5 },
+  'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25, tiered: true },
+  'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true },
   'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
   'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
   'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
@@ -138,7 +155,13 @@ export function buildPricing(defaults: Record<string, ModelPrice>, overrideJson?
     }
     for (const [model, price] of Object.entries(parsed)) {
       if (isValidPrice(price)) {
-        prices[model] = { inputPerMTok: price.inputPerMTok, outputPerMTok: price.outputPerMTok }
+        prices[model] = {
+          inputPerMTok: price.inputPerMTok,
+          outputPerMTok: price.outputPerMTok,
+          // Un override peut marquer un modèle tiered/thinking (refus de devis) sans release.
+          ...(price.tiered ? { tiered: true } : {}),
+          ...(price.thinking ? { thinking: true } : {}),
+        }
       } else {
         invalid.push(model)
       }
@@ -151,6 +174,14 @@ const registry = buildPricing(DEFAULTS, process.env.OPENMULTI_PRICING_JSON)
 
 /** Entrées d'override rejetées au boot (loggées par l'appelant au câblage, étape 3). */
 export const pricingInvalid: readonly string[] = registry.invalid
+
+/** Version (hash court) de la table EFFECTIVE (defaults + override env) — épinglée dans
+ * le jeton de devis (E-1) : à l'exécution, une table qui a dérivé depuis le devis est
+ * détectable (le contrat programme la refuse, le contrat chat recalcule la borne). */
+export const PRICING_TABLE_VERSION: string = createHash('sha256')
+  .update(JSON.stringify(registry.prices))
+  .digest('hex')
+  .slice(0, 12)
 
 export function priceFor(model: string): ModelPrice | undefined {
   return registry.prices[model]

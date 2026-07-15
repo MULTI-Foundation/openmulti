@@ -80,9 +80,27 @@ test('ecrit un hash par cle x jour UTC, champs model|provider|metric, TTL pose e
   assert.equal(h.get('a/1|openrouter|requests'), 2)
   assert.equal(h.get('a/1|openrouter|prompt_tokens'), 200)
   assert.equal(h.get('a/1|openrouter|completion_tokens'), 100)
-  assert.ok(Math.abs(h.get('a/1|openrouter|cost_usd')! - 0.02) < 1e-12)
+  // E-4 : le coût s'écrit en micro-USD entiers (2 × 0.01 $ = 20_000 µ$), pas en float.
+  assert.equal(h.get('a/1|openrouter|cost_microusd'), 20000)
+  assert.equal(h.get('a/1|openrouter|cost_usd'), undefined, 'plus de champ float legacy écrit')
   assert.equal(h.get('a/1|openrouter|errors'), undefined, 'pas d\'erreur comptee sans error')
   assert.equal(client.expires[k], 400 * 24 * 3600)
+})
+
+test('P0-6 : un cout/facture legitime de 0 est metre (serie a 0), pas escamote', async () => {
+  // Modele gratuit ou reponse a cout nul : la requete DOIT etre facturee 0, pas traitee
+  // comme si le cout etait absent. Avant le fix, `if (r.costUsd)`/`if (r.billedUsd)`
+  // sautaient les ecritures -> aucune serie cost_usd/billed_usd (0 escamote).
+  meterUsage({ key: 'freeproj', model: 'free/model', provider: 'openrouter', costUsd: 0, billedUsd: 0 })
+  await settle()
+  const h = client.store.get(`meter:freeproj:${meterDay()}`)!
+  assert.ok(h, 'hash absent')
+  assert.equal(h.get('free/model|openrouter|requests'), 1)
+  // E-4 + P0-6 : champs micro-USD entiers écrits à 0 (mesuré), pas escamotés.
+  assert.equal(h.get('free/model|openrouter|cost_microusd'), 0, 'cost_microusd=0 doit etre ecrit')
+  assert.equal(h.get('free/model|openrouter|billed_microusd'), 0, 'billed_microusd=0 doit etre ecrit')
+  // le ledger spent:microusd (base du solde prepaye) recoit aussi l'entree a 0
+  assert.equal(client.store.get('spent:microusd')?.get('freeproj'), 0)
 })
 
 test('les chemins d\'acces du meme modele sont des series distinctes', async () => {

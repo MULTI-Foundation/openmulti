@@ -60,12 +60,14 @@ test('les modeles du catalogue d\'exploitation sont tarifes (regression smoke 20
   // le bandit le croit gratuit et le sur-exploite. Verrouille les entrees ajoutees
   // (prix verifies API OpenRouter 2026-07-02) + la double graphie anthropic
   // (point cote OpenRouter, tiret cote API directe).
-  const expected: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
+  // deepEqual STRICT : verrouille aussi les flags tiered/thinking (P0-1/Q-1) — en perdre
+  // un ré-ouvrirait un devis « garanti » sous-estimant sur ces modèles.
+  const expected: Record<string, { inputPerMTok: number; outputPerMTok: number; tiered?: true; thinking?: true }> = {
     'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
     'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
     'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
-    'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25 },
-    'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5 },
+    'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25, tiered: true },
+    'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true },
     'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
     'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
     'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },

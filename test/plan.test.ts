@@ -15,10 +15,12 @@ process.env.OPENMULTI_MODEL_ECONOMY = 'deepseek/deepseek-chat'
 
 let app: { fetch: (req: Request) => Promise<Response> }
 let computeQuote: typeof import('../src/plan.ts').computeQuote
+let pricedModelIds: typeof import('../src/pricing.ts').pricedModelIds
 
 before(async () => {
   ;({ app } = await import('../src/app.ts'))
   ;({ computeQuote } = await import('../src/plan.ts'))
+  ;({ pricedModelIds } = await import('../src/pricing.ts'))
 })
 
 function post(body: unknown, key = 'sk_plan_test') {
@@ -174,6 +176,63 @@ test('computeQuote: modalities image -> unsupported_content', () => {
   const r = computeQuote(req as never, 'moonshotai/kimi-k2.6', undefined, 1)
   assert.equal(r.quote, null)
   assert.equal(r.unavailable, 'unsupported_content')
+})
+
+// ── P0-1 / Q-1 : un modèle tarifé par palier ou thinking n'est pas quotable ─────
+// La table ne porte que le palier de base (borne BASSE) : un devis « garanti » dessus
+// sous-estimerait la facture. On refuse (jamais de devis muet optimiste), tout en
+// gardant le prix de base pour la facturation best-effort (computeCostUsd non gardé).
+
+test('computeQuote: modèle tiered (qwen par palier) -> pricing_tiered, pas de devis', () => {
+  const req = { messages: MSGS, max_tokens: 100 }
+  const r = computeQuote(req as never, 'qwen/qwen-plus', undefined, 1)
+  assert.equal(r.quote, null)
+  assert.equal(r.unavailable, 'pricing_tiered')
+})
+
+test('computeQuote: modèle thinking (deepseek-reasoner) -> pricing_thinking, pas de devis', () => {
+  const req = { messages: MSGS, max_tokens: 100 }
+  const r = computeQuote(req as never, 'deepseek/deepseek-reasoner', undefined, 1)
+  assert.equal(r.quote, null)
+  assert.equal(r.unavailable, 'pricing_thinking')
+})
+
+test('computeQuote: un modèle NON-tiered/thinking reste quotable (pas de refus faux positif)', () => {
+  const req = { messages: MSGS, max_tokens: 100 }
+  // deepseek-chat n'est ni tiered ni thinking (contrairement à -reasoner) -> devis garanti
+  const r = computeQuote(req as never, 'deepseek/deepseek-chat', undefined, 1)
+  assert.ok(r.quote, 'deepseek-chat doit rester quotable')
+  assert.equal(r.unavailable, undefined)
+})
+
+// ── P0-2 : verrou de l'axiome byte-BPE (≤1 token/octet) sur les modèles quotables ──
+// L'axiome fonde la borne d'entrée (octets UTF-8 = majorant du compte de tokens). Il est
+// VALIDÉ pour la famille tiktoken (o200k/cl100k) mais VIOLÉ pour Qwen (BBPE ~1.33 tok/octet)
+// — un devis « garanti » sur Qwen sous-estimerait l'entrée. Mitigation : Qwen tout entier
+// est refusé (flag tiered, P0-1). Ce test lie les deux : si un Qwen redevenait quotable
+// (flag perdu), la borne-octets sous-estimerait à nouveau -> régression P0-2 rattrapée ici.
+
+test('P0-2: aucun modèle Qwen (axiome ≤1 tok/octet VIOLÉ) n\'émet de devis garanti', () => {
+  const req = { messages: MSGS, max_tokens: 100 }
+  const qwen = pricedModelIds().filter((m) => m.startsWith('qwen/'))
+  assert.ok(qwen.length >= 8, `les modèles qwen doivent être dans la table (vu ${qwen.length})`)
+  for (const m of qwen) {
+    const r = computeQuote(req as never, m, undefined, 1)
+    assert.equal(r.quote, null, `${m} ne doit pas émettre de devis garanti (borne-octets non sûre)`)
+    assert.equal(r.unavailable, 'pricing_tiered', m)
+  }
+})
+
+test('/v1/plan: un modèle thinking épinglé -> 200 sans quote + quote_unavailable', async () => {
+  // model concret honoré tel quel par route() -> le devis refuse proprement (pas de 500)
+  const res = await post({ model: 'deepseek/deepseek-reasoner', messages: MSGS, max_tokens: 100 })
+  assert.equal(res.status, 200)
+  const j = await res.json()
+  assert.equal(j.model, 'deepseek/deepseek-reasoner')
+  assert.equal(j.quote, null)
+  assert.equal(j.quote_unavailable, 'pricing_thinking')
+  // pas de contrat signé sur une borne non garantie
+  assert.equal(j.quote_token, undefined)
 })
 
 // ── Audit sécu : n et max_completion_tokens ne doivent pas contourner la borne ──

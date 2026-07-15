@@ -17,7 +17,7 @@
 // Le devis est en dollars FACTURÉS (marge du projet incluse — c'est ce que paiera le
 // client), arrondi au micro-dollar SUPÉRIEUR : une borne s'arrondit vers le haut.
 
-import { computeCostUsd } from './pricing.js'
+import { computeCostUsd, priceFor } from './pricing.js'
 import { completionCount, effectiveOutputCap } from './output-bounds.js'
 import type { ChatRequest } from './types.js'
 
@@ -30,8 +30,13 @@ export interface Quote {
   max_cost_usd: number
 }
 
-/** Pourquoi aucun devis n'a pu être garanti (jamais de devis approximatif à la place). */
-export type QuoteUnavailable = 'unsupported_content' | 'no_output_bound' | 'pricing_unknown'
+/** Pourquoi aucun devis n'a pu être garanti (jamais de devis approximatif à la place).
+ * pricing_tiered : le modèle est tarifé par palier de contexte/taux thinking et la table
+ * ne porte que le palier de base (borne basse) — quoter dessus sous-estimerait (P0-1).
+ * pricing_thinking : la sortie facturée du modèle dépend d'un toggle thinking non
+ * décidable statiquement — le cap de sortie ne majore pas la CoT facturée (Q-1) ; quoter
+ * dessus pourrait sous-estimer la sortie. */
+export type QuoteUnavailable = 'unsupported_content' | 'no_output_bound' | 'pricing_unknown' | 'pricing_tiered' | 'pricing_thinking'
 
 export type QuoteResult = { quote: Quote; unavailable?: undefined } | { quote: null; unavailable: QuoteUnavailable }
 
@@ -63,8 +68,17 @@ export function computeQuote(
   model: string,
   maxTokensCeiling: number | undefined,
   marginFactor: number,
+  extraInputTokens = 0,
 ): QuoteResult {
   if (hasNonTextContent(req)) return { quote: null, unavailable: 'unsupported_content' }
+
+  // Tarification par palier (P0-1) : la table porte une borne BASSE, pas un max — refus,
+  // même règle qu'un modèle non tarifé (la facturation, elle, reste best-effort).
+  const price = priceFor(model)
+  if (price?.tiered) return { quote: null, unavailable: 'pricing_tiered' }
+  // Toggle thinking non décidable statiquement (Q-1) : le cap de sortie n'est pas
+  // prouvablement une borne sur la CoT facturée — refus, même posture que tiered.
+  if (price?.thinking) return { quote: null, unavailable: 'pricing_thinking' }
 
   // Borne de sortie par complétion (prend en compte max_completion_tokens ET le plafond
   // de tier), multipliée par n : c'est le total de tokens de sortie que l'exécution du
@@ -74,7 +88,10 @@ export function computeQuote(
   if (perCompletion === undefined) return { quote: null, unavailable: 'no_output_bound' }
   const outputMax = perCompletion * completionCount(req)
 
-  const inputMax = Buffer.byteLength(JSON.stringify(req), 'utf8')
+  // `extraInputTokens` : tokens d'entrée à ajouter à la borne octets — utilisé par le
+  // pliage du devis programme (E-5/program-quote) pour compter la valeur qui coule
+  // (bornée en TOKENS par le cap de sortie amont, pas en octets).
+  const inputMax = Buffer.byteLength(JSON.stringify(req), 'utf8') + extraInputTokens
   const rawMax = computeCostUsd(model, inputMax, outputMax)
   if (rawMax === undefined) return { quote: null, unavailable: 'pricing_unknown' }
 
