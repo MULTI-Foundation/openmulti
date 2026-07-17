@@ -15,7 +15,7 @@
 // nouvelle résolution pourrait élire un autre candidat.
 
 import { Hono } from 'hono'
-import { route } from '../router.js'
+import { route, RouteRefusal } from '../router.js'
 import { providerFor } from '../providers/index.js'
 import { computeQuote } from '../plan.js'
 import { computeProgramQuote, validateProgram } from '../program-quote.js'
@@ -132,7 +132,17 @@ plan.post('/v1/plan', async (c) => {
     })
   }
 
-  const decision = route(req)
+  // Même refus qu'à l'exécution (chat.ts) : un devis sur un nom nu inconnu/ambigu
+  // serait un devis pour le MAUVAIS modèle — 400 explicite, cohérent avec le run.
+  let decision: ReturnType<typeof route>
+  try {
+    decision = route(req)
+  } catch (e) {
+    if (e instanceof RouteRefusal) {
+      return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+    }
+    throw e
+  }
   const provider = providerFor(decision.model)
   const marginFactor = 1 + marginFor(key) / 100
   const q = computeQuote(req, decision.model, decision.maxTokensCeiling, marginFactor)

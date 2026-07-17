@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto'
 import type { MiddlewareHandler } from 'hono'
 import { config } from './config.js'
-import { route } from './router.js'
+import { route, RouteRefusal } from './router.js'
 import { computeQuote } from './plan.js'
 import { PRICING_TABLE_VERSION } from './pricing.js'
 import { chatQuoteDigest, checkPinnedQuote, decodeQuoteToken, stripQuoteToken } from './quote-token.js'
@@ -187,7 +187,15 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
 
   // ── 1. Pas de paiement : le devis, sous forme de 402 x402 ────────────────────────
   if (!payment) {
-    const maxUsd = quoteUsd(req)
+    // Nom nu inconnu/ambigu : 400 explicite (même refus que chat/plan) — surtout pas
+    // un 402 qui ferait payer un devis calculé sur le mauvais modèle.
+    let maxUsd: number | undefined
+    try {
+      maxUsd = quoteUsd(req)
+    } catch (e) {
+      if (e instanceof RouteRefusal) return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+      throw e
+    }
     if (maxUsd === undefined) {
       // Pas de borne = pas de prix honnête. L'agent pose max_tokens et retente.
       return c.json(
@@ -236,7 +244,13 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
     const v = decodeQuoteToken(pinToken, config.quoteToken.secret)
     if (!v.valid) return c.json(err(`Invalid quote token (${v.reason}) — request a fresh quote from /v1/plan`, 'invalid_payment'), 402)
     const exec = stripQuoteToken(req)
-    const decision = route(exec, v.claims.candidates)
+    let decision: ReturnType<typeof route>
+    try {
+      decision = route(exec, v.claims.candidates)
+    } catch (e) {
+      if (e instanceof RouteRefusal) return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+      throw e
+    }
     const q = computeQuote(exec, decision.model, decision.maxTokensCeiling, 1 + config.marginPct / 100)
     const contract = checkPinnedQuote({
       claims: v.claims,
@@ -248,7 +262,13 @@ export const x402Gate: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!contract.ok) return c.json({ error: { message: contract.message, type: 'quote_conflict', code: contract.code } }, 409)
     requiredUsd = v.claims.usd
   } else {
-    const recomputed = quoteUsd(req)
+    let recomputed: number | undefined
+    try {
+      recomputed = quoteUsd(req)
+    } catch (e) {
+      if (e instanceof RouteRefusal) return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+      throw e
+    }
     if (recomputed === undefined) {
       return c.json(err('unpriceable request: set max_tokens to get a payable quote', 'invalid_request_error'), 402)
     }

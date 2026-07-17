@@ -4,8 +4,26 @@
 
 import { candidatesFor, IMAGE_MODEL, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
+import { resolveBareModel } from './model-alias.js'
 import { config } from './config.js'
 import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js'
+
+/**
+ * Refus de routage : un `model` nu (sans '/') inconnu ou ambigu. Toujours servi en
+ * 400 structuré par les surfaces (chat, plan, x402, council) — jamais un repli
+ * silencieux vers le tier par défaut (le piège historique : demander « kimi-k2.6 »
+ * servait le primaire balanced, facturé, sans erreur).
+ */
+export class RouteRefusal extends Error {
+  readonly status = 400 as const
+  constructor(
+    readonly code: 'model_unknown' | 'model_ambiguous',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'RouteRefusal'
+  }
+}
 
 // "auto", "auto:economy", "auto:quality" -> tier (if encoded in the alias).
 function tierFromModelAlias(model: string | undefined): Tier | null {
@@ -29,7 +47,11 @@ function tierFromModelAlias(model: string | undefined): Tier | null {
  * candidats-du-tier ∩ snapshot — le pin est un ensemble, jamais un modèle imposé.
  * Intersection vide (catalogue changé depuis le devis) : la sélection retombe sur les
  * candidats courants et c'est le VÉRIFICATEUR du jeton qui rejette (le modèle résolu
- * sort du snapshot) — route() ne refuse jamais, il décide.
+ * sort du snapshot) — sous contrainte, route() ne refuse jamais, il décide.
+ *
+ * SEULE exception (RouteRefusal) : un `model` nu (sans '/') inconnu ou ambigu — voir
+ * model-alias.ts. Toutes les surfaces qui routent du `model` appelant doivent le
+ * servir en 400 structuré.
  */
 export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteDecision {
   const allow = req.openmulti?.allow
@@ -42,6 +64,29 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
     typeof req.model === 'string' && req.model !== 'auto' && alias === null && req.model.includes('/')
   if (looksConcrete) {
     return { model: req.model as string, reason: 'caller pinned a concrete model', candidates: [req.model as string] }
+  }
+
+  // Nom NU (string non vide, pas 'auto'/'auto:<tier>', sans '/') : résolution stricte
+  // vers l'id canonique par correspondance UNIQUE de suffixe (model-alias.ts). Inconnu
+  // ou ambigu → RouteRefusal (400 aux surfaces), jamais le tier par défaut en silence.
+  const bare =
+    typeof req.model === 'string' && req.model.length > 0 && req.model !== 'auto' && alias === null
+  if (bare) {
+    const r = resolveBareModel(req.model as string)
+    if (r.kind === 'resolved') {
+      return {
+        model: r.model,
+        reason: `caller pinned "${req.model}" (resolved to ${r.model})`,
+        candidates: [r.model],
+      }
+    }
+    const hint = 'use a canonical "vendor/model" id, "auto", or "auto:<economy|balanced|quality>"'
+    throw new RouteRefusal(
+      r.kind === 'ambiguous' ? 'model_ambiguous' : 'model_unknown',
+      r.kind === 'ambiguous'
+        ? `ambiguous model name "${req.model}" (matches: ${r.matches.join(', ')}) — ${hint}`
+        : `unknown model "${req.model}" — ${hint}`,
+    )
   }
 
   // Image generation is a chat completion with image modality. An `auto`/tier

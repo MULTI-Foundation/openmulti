@@ -6,7 +6,7 @@
 // X-OpenMulti-* headers (stream) and the `openmulti` block (non-stream).
 
 import { Hono } from 'hono'
-import { route } from '../router.js'
+import { route, RouteRefusal } from '../router.js'
 import { pathsFor, type UpstreamCall } from '../providers/index.js'
 import { backoff, normalizedUpstreamError } from '../providers/shared.js'
 import { TIMEOUTS, config } from '../config.js'
@@ -112,7 +112,17 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // E-1 : le routage sous contrat est CONTRAINT au snapshot de candidats du devis —
   // la sélection (default/smart) tourne normalement, DANS le snapshot (router.ts).
-  const decision = route(req, pin?.candidates)
+  // Un `model` nu inconnu/ambigu est refusé ICI en 400 (RouteRefusal, model-alias.ts),
+  // jamais servi sur le tier par défaut en silence.
+  let decision: ReturnType<typeof route>
+  try {
+    decision = route(req, pin?.candidates)
+  } catch (e) {
+    if (e instanceof RouteRefusal) {
+      return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+    }
+    throw e
+  }
   // Chemins d'accès ordonnés : l'élu d'abord, puis les alternatives de fallback
   // (même modèle — la réponse est préservée ; cf providers/index.ts pathsFor).
   const paths = pathsFor(decision.model)

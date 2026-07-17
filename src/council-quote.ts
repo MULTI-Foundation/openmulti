@@ -15,7 +15,7 @@
 import { computeQuote, type Quote, type QuoteResult, type QuoteUnavailable } from './plan.js'
 import { resolveCouncil, subRequest, type CouncilResolved } from './council.js'
 import { anonymizeResponses, buildReviewMessages, buildSynthesisMessages } from './council-prompts.js'
-import { route } from './router.js'
+import { route, RouteRefusal } from './router.js'
 import type { ChatRequest } from './types.js'
 
 export interface CouncilQuote extends CouncilResolved {
@@ -45,6 +45,16 @@ export function computeCouncilQuote(req: ChatRequest, marginFactor: number): Cou
   const deliberate = mode === 'deliberate' && panel.length >= 2
   const calls = panel.length + (deliberate ? panel.length : 0) + 1
   const reason = `council ${mode}: ${panel.length} panel${deliberate ? ' + review' : ''} + chair`
+
+  // Un membre au nom nu inconnu/ambigu (RouteRefusal) rend le council irrésoluble,
+  // comme un panel invalide — 400 explicite, jamais un devis calculé en silence sur le
+  // tier par défaut. Pré-validation : route() est pur, le double routage est gratuit.
+  try {
+    for (const m of [...panel, chair]) route(subRequest(m, req.messages, req))
+  } catch (e) {
+    if (e instanceof RouteRefusal) return { error: e.message }
+    throw e
+  }
   const out = (q: QuoteResult): CouncilQuote =>
     ({ ...resolved, calls, reason, quote: q.quote, ...(q.unavailable ? { unavailable: q.unavailable } : {}) })
 

@@ -19,6 +19,7 @@ Corps : requête OpenAI standard (`messages`, `stream`, `max_tokens`, `tools`, �
 | `model` | `auto` | OpenMulti choisit (tier par défaut : balanced) |
 | | `auto:economy` / `auto:balanced` / `auto:quality` | tier encodé dans l'alias |
 | | `vendor/model` concret | honoré tel quel, aucun routage |
+| | nom nu (sans `/`, ex. `kimi-k2.6`) | résolu vers l'id canonique si le suffixe correspond à UN SEUL modèle connu (catalogue ∪ tarifés) ; inconnu ou ambigu → `400` (`model_unknown` / `model_ambiguous`), jamais de repli silencieux |
 | `openmulti.tier` | `economy` / `balanced` / `quality` | niveau qualité/prix visé |
 | `openmulti.purpose` | `generation`, `light`, `agent`, … | la tâche ; affine le choix (ex. `agent` → modèle de code) |
 | `openmulti.allow` | `["vendor/model", …]` | contrainte dure : ne choisir que dans cette liste |

@@ -8,7 +8,7 @@
 // est la loi) ; il convergera vers ce seam plus tard. La boucle retry/failover ci-dessous
 // est volontairement le miroir de celle du handler.
 
-import { route } from './router.js'
+import { route, RouteRefusal } from './router.js'
 import { pathsFor } from './providers/index.js'
 import { backoff } from './providers/shared.js'
 import { config } from './config.js'
@@ -38,7 +38,24 @@ export interface ForwardCtx {
 
 export async function forwardChatNonStream(req: ChatRequest, ctx: ForwardCtx): Promise<ForwardResult> {
   const startedAt = Date.now()
-  const decision = route(req)
+  // Un membre au nom nu inconnu/ambigu (RouteRefusal) est un membre EN ÉCHEC (ok:false),
+  // pas une exception : le council dégrade proprement (okPanel), jamais un 500.
+  let decision: ReturnType<typeof route>
+  try {
+    decision = route(req)
+  } catch (e) {
+    if (e instanceof RouteRefusal) {
+      return {
+        ok: false,
+        status: e.status,
+        data: { error: { message: e.message, type: 'invalid_request_error', code: e.code } },
+        model: typeof req.model === 'string' ? req.model : 'auto',
+        provider: 'none',
+        reason: 'route refused',
+      }
+    }
+    throw e
+  }
   const paths = pathsFor(decision.model)
   let provider = paths[0]!
   let failedOver = false
