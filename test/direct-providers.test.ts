@@ -124,3 +124,54 @@ test('mode smart : les deux chemins sont éligibles et explorés à froid', () =
   // et pathsFor doit proposer le failover dans les deux sens.
   assert.equal(pathsFor('z-ai/glm-4.6').length, 2)
 })
+
+// ── Thinking mode DeepSeek V4 (chemin natif) ─────────────────────────────────
+// L'API native exige le round-trip du reasoning_content des tours assistant dans
+// les boucles d'outils (400 sinon, vécu prod 2026-07-17). Un appelant OpenAI-shape
+// ne le renvoie pas : le steer coupe le thinking dans ce cas précis, et lui seul.
+
+const TOOLS = [{ type: 'function', function: { name: 'f', parameters: {} } }]
+
+test('deepseek v4 + tools sans round-trip -> thinking disabled', async () => {
+  const { deepseekProvider } = await import('../src/providers/deepseek.ts')
+  const body = deepseekProvider.buildBody(
+    { model: 'x', messages: [{ role: 'user', content: 'hi' }], tools: TOOLS } as any,
+    'deepseek/deepseek-v4-flash',
+  )
+  assert.deepEqual(body.thinking, { type: 'disabled' })
+})
+
+test('deepseek v4 + tools avec round-trip de reasoning_content -> thinking intact', async () => {
+  const { deepseekProvider } = await import('../src/providers/deepseek.ts')
+  const body = deepseekProvider.buildBody(
+    {
+      model: 'x',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'ok', reasoning_content: 'pensée', tool_calls: [] },
+        { role: 'user', content: 'suite' },
+      ],
+      tools: TOOLS,
+    } as any,
+    'deepseek/deepseek-v4-flash',
+  )
+  assert.equal(body.thinking, undefined)
+})
+
+test('deepseek v4 sans tools -> thinking intact (le 400 ne touche que les boucles d\'outils)', async () => {
+  const { deepseekProvider } = await import('../src/providers/deepseek.ts')
+  const body = deepseekProvider.buildBody(
+    { model: 'x', messages: [{ role: 'user', content: 'hi' }] } as any,
+    'deepseek/deepseek-v4-flash',
+  )
+  assert.equal(body.thinking, undefined)
+})
+
+test('deepseek non-v4 + tools -> thinking intact (param inconnu des anciens modèles)', async () => {
+  const { deepseekProvider } = await import('../src/providers/deepseek.ts')
+  const body = deepseekProvider.buildBody(
+    { model: 'x', messages: [{ role: 'user', content: 'hi' }], tools: TOOLS } as any,
+    'deepseek/deepseek-chat',
+  )
+  assert.equal(body.thinking, undefined)
+})

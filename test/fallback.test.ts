@@ -69,11 +69,24 @@ test('upstream injoignable (connect error) -> meme bascule', async () => {
   assert.match((await res.json()).openmulti.reason, /fallback from moonshot/)
 })
 
-test('4xx deterministe -> renvoye tel quel, AUCUN fallback (la requete est en cause)', async () => {
+test('4xx non-retryable sur le chemin direct -> bascule openrouter (deterministe pour CE chemin seulement)', async () => {
+  // Les API natives ont des exigences de forme propres (DeepSeek V4: round-trip du
+  // reasoning_content, Z.ai: content parts) qu'OpenRouter normalise - un 400 direct
+  // ne condamne pas la requete, vecu prod 2026-07-17.
   onMoonshot = () => status(400)
   const res = await chat()
-  assert.equal(res.status, 400)
-  assert.doesNotMatch(renderProm(), /openmulti_path_fallback_total\{/)
+  assert.equal(res.status, 200)
+  const j = await res.json()
+  assert.match(j.openmulti.reason, /via openrouter \(fallback from moonshot\)/)
+  assert.match(renderProm(), /openmulti_path_fallback_total\{model="moonshotai\/kimi-k2\.6",from="moonshot",to="openrouter"\} 1\b/)
+})
+
+test('les deux chemins refusent en 4xx -> erreur du DERNIER chemin, une seule bascule (la requete etait en cause)', async () => {
+  onMoonshot = () => status(400)
+  onOpenRouter = () => status(422)
+  const res = await chat()
+  assert.equal(res.status, 422)
+  assert.match(renderProm(), /openmulti_path_fallback_total\{model="moonshotai\/kimi-k2\.6",from="moonshot",to="openrouter"\} 1\b/)
 })
 
 test('les deux chemins en panne -> erreur du dernier chemin, une seule bascule comptee', async () => {

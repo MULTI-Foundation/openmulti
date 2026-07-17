@@ -1,7 +1,7 @@
 // Forward NON-STREAM d'un chat à travers le routing interne d'OpenMulti (route +
 // pathsFor + retry/failover same-model + normalize), avec enregistrement PAR APPEL
 // (bandit/metering/caps voient chaque appel). C'est le seam réutilisable : le council
-// (council.ts) s'en sert pour chaque membre du panel, le juge et le chair — « OpenMulti
+// (council.ts) s'en sert pour chaque membre du panel, le juge et le chair - « OpenMulti
 // qui s'appelle lui-même » N+1 fois.
 //
 // Le handler stream/non-stream historique (routes/chat.ts) n'est PAS modifié (le contrat
@@ -32,7 +32,7 @@ export interface ForwardResult {
 
 export interface ForwardCtx {
   key: string
-  /** Facteur de marge (1 + t/100) — appliqué au coût FACTURÉ (metering/caps), pas au brut. */
+  /** Facteur de marge (1 + t/100) - appliqué au coût FACTURÉ (metering/caps), pas au brut. */
   marginFactor: number
 }
 
@@ -109,6 +109,16 @@ export async function forwardChatNonStream(req: ChatRequest, ctx: ForwardCtx): P
           failedOver = true
           continue pathLoop
         }
+      }
+      // Miroir de routes/chat.ts : un 4xx non-retryable est déterministe pour CE
+      // chemin, pas forcément pour l'autre (exigences de forme propres aux API
+      // natives, qu'OpenRouter normalise). Une seule bascule, jamais de retry.
+      if (!call.response.ok && call.response.status < 500 && !provider.isRetryable(call.response.status) && next) {
+        await call.response.body?.cancel().catch(() => {})
+        record({ error: true, durationMs: Date.now() - startedAt })
+        recordPathFallback(decision.model, provider.name, next.name)
+        failedOver = true
+        continue pathLoop
       }
       break pathLoop
     }

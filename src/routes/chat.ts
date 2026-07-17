@@ -29,7 +29,7 @@ chat.post('/v1/chat/completions', async (c) => {
   const startedAt = Date.now()
   const key = keyLabel(c.get('apiKey'))
 
-  // B3 : posture des projets signup (anonymes) — fail-closed si le store est down
+  // B3 : posture des projets signup (anonymes) - fail-closed si le store est down
   // (503), 402 sans crédits en mode zéro-avance. Les clients à clé de confiance ne
   // passent jamais par cette gate (fail-open historique préservé).
   const topup = topupUrlFor(key)
@@ -48,7 +48,7 @@ chat.post('/v1/chat/completions', async (c) => {
   const balance = checkBalance(key)
   if (balance.blocked) {
     return c.json(
-      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) — top up your account.${topupHint}`, type: 'insufficient_credits' } },
+      { error: { message: `Insufficient credits (balance: ${balance.balanceUsd?.toFixed(4)} USD) - top up your account.${topupHint}`, type: 'insufficient_credits' } },
       402,
     )
   }
@@ -93,12 +93,12 @@ chat.post('/v1/chat/completions', async (c) => {
     }
     const verdict = decodeQuoteToken(token, config.quoteToken.secret)
     if (!verdict.valid) {
-      return c.json({ error: { message: `invalid quote token (${verdict.reason}) — request a fresh quote from /v1/plan`, type: 'invalid_quote_token', code: verdict.reason } }, 422)
+      return c.json({ error: { message: `invalid quote token (${verdict.reason}) - request a fresh quote from /v1/plan`, type: 'invalid_quote_token', code: verdict.reason } }, 422)
     }
     pin = verdict.claims
   }
 
-  // Council / fusion (mixture-of-agents) — opt-in, NON-STREAM (MVP). L'orchestrateur
+  // Council / fusion (mixture-of-agents) - opt-in, NON-STREAM (MVP). L'orchestrateur
   // fan-out le panel via le routing interne (chemins directs + bandit) puis synthétise ;
   // chaque sous-appel s'enregistre lui-même (bandit/metering/caps), le coût agrégé est
   // dans usage.cost. Le flux historique ci-dessous reste inchangé pour les appels normaux.
@@ -110,7 +110,7 @@ chat.post('/v1/chat/completions', async (c) => {
     return c.json(body, status as 200)
   }
 
-  // E-1 : le routage sous contrat est CONTRAINT au snapshot de candidats du devis —
+  // E-1 : le routage sous contrat est CONTRAINT au snapshot de candidats du devis -
   // la sélection (default/smart) tourne normalement, DANS le snapshot (router.ts).
   // Un `model` nu inconnu/ambigu est refusé ICI en 400 (RouteRefusal, model-alias.ts),
   // jamais servi sur le tier par défaut en silence.
@@ -124,7 +124,7 @@ chat.post('/v1/chat/completions', async (c) => {
     throw e
   }
   // Chemins d'accès ordonnés : l'élu d'abord, puis les alternatives de fallback
-  // (même modèle — la réponse est préservée ; cf providers/index.ts pathsFor).
+  // (même modèle - la réponse est préservée ; cf providers/index.ts pathsFor).
   const paths = pathsFor(decision.model)
   let provider = paths[0]!
   const isStream = req.stream === true
@@ -135,7 +135,7 @@ chat.post('/v1/chat/completions', async (c) => {
   // construction. Le bandit, lui, reste sur le coût BRUT (costUsd).
   const marginFactor = 1 + marginFor(key) / 100
 
-  // E-1 : le fond du contrat — digest, appartenance au snapshot, et borne RECALCULÉE
+  // E-1 : le fond du contrat - digest, appartenance au snapshot, et borne RECALCULÉE
   // sous la table de prix et la marge COURANTES (jamais celles du jeton) : une dérive
   // prix/marge/routage qui ferait dépasser le montant quoté est un 409 structuré AVANT
   // toute dépense (la fenêtre TOCTOU devis->run est fermée ici).
@@ -144,7 +144,7 @@ chat.post('/v1/chat/completions', async (c) => {
     const q = computeQuote(exec, decision.model, decision.maxTokensCeiling, marginFactor)
     if (pin.kind === 'program') {
       // Exécution ÉTAGÉE : chaque étage rejoue le MÊME jeton avec openmulti.quote_stage.
-      // E-8 (AX-CHAIN) : la garde pré-spend mesure l'entrée réelle de l'étage — tokenizer
+      // E-8 (AX-CHAIN) : la garde pré-spend mesure l'entrée réelle de l'étage - tokenizer
       // du provider si un pont est configuré (mesure serrée), sinon repli borne OCTETS
       // conservateur (jamais optimiste ; cf stage-input-guard.ts).
       const realInput = await measureStageInput(exec, decision.model)
@@ -178,11 +178,11 @@ chat.post('/v1/chat/completions', async (c) => {
   }
 
   // Une observation = deux écritures : Prometheus (monitoring, in-memory) et le
-  // metering durable (facturation, Redis, fire-and-forget — cf meter.ts). `provider`
+  // metering durable (facturation, Redis, fire-and-forget - cf meter.ts). `provider`
   // est mutable : l'helper capture toujours le chemin courant/final.
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
     const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
-    // P0-6 : != null, pas truthiness — un coût légitime de 0 doit produire billedUsd=0
+    // P0-6 : != null, pas truthiness - un coût légitime de 0 doit produire billedUsd=0
     // (facturé/métré), pas être escamoté comme absent.
     if (rec.costUsd != null) rec.billedUsd = rec.costUsd * marginFactor
     recordRequest(rec)
@@ -194,7 +194,7 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // Bounded retry on transient upstream failures, SAME model. We retry to ride out a
   // hiccup (connect error, 429/5xx); on the LAST retry of a path, if an alternate
-  // access path exists (incrément D), the request fails over — still the same model,
+  // access path exists (incrément D), the request fails over - still the same model,
   // so the answer is preserved (cross-MODEL fallback would change it: out of scope).
   // Retries/fallbacks only ever happen before any byte reaches the client, so they
   // are safe for both stream and non-stream.
@@ -223,13 +223,13 @@ chat.post('/v1/chat/completions', async (c) => {
         // P0-11 : sous contrat (jeton de devis présenté), AU PLUS UN dispatch upstream.
         // Un échec transport APRÈS envoi (timeout, reset en cours de lecture) peut déjà
         // avoir été facturé côté provider ; un retry ou un failover re-facturerait le
-        // même étage et pourrait dépasser le montant signé — le devis ne couvre chaque
+        // même étage et pourrait dépasser le montant signé - le devis ne couvre chaque
         // étage qu'UNE fois. Direction sûre : refus structuré, zéro re-dispatch ;
         // l'appelant relance s'il le veut (nouvelle exécution, nouveau paiement).
         if (pin) {
           log.error('upstream_error_contract_no_retry', { key, model: decision.model, provider: provider.name, reason, durationMs: Date.now() - startedAt })
           record({ error: true, durationMs: Date.now() - startedAt })
-          return c.json({ error: { message: `${reason} — no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
+          return c.json({ error: { message: `${reason} - no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
         }
         if (attempt < config.maxRetries) {
           attempt++
@@ -248,7 +248,7 @@ chat.post('/v1/chat/completions', async (c) => {
       }
 
       if (!call.response.ok && provider.isRetryable(call.response.status)) {
-        // P0-11 : même règle sous contrat pour un statut transitoire REÇU (429/5xx) —
+        // P0-11 : même règle sous contrat pour un statut transitoire REÇU (429/5xx) -
         // pas de retry ni de failover ; l'erreur upstream normalisée (OM-07) est
         // renvoyée telle quelle, statut conservé. Un seul dispatch a eu lieu.
         if (pin) break pathLoop
@@ -267,6 +267,18 @@ chat.post('/v1/chat/completions', async (c) => {
           continue pathLoop
         }
       }
+      // Un 4xx NON-retryable est déterministe POUR CE CHEMIN, pas forcément pour
+      // l'autre : les API natives ont des exigences de forme propres qu'OpenRouter
+      // normalise (vécu prod 2026-07-17 : DeepSeek V4 thinking exige le round-trip de
+      // reasoning_content -> 400 ; Z.ai refuse les content parts ; Qwen 403 quota).
+      // Une seule bascule, jamais de retry same-path (même corps -> même refus), et
+      // pas sous contrat (P0-11 : au plus un dispatch). Si l'autre chemin refuse
+      // aussi, son erreur est renvoyée normalement (la requête était en cause).
+      if (!call.response.ok && call.response.status < 500 && !provider.isRetryable(call.response.status) && next && !pin) {
+        const detail = await call.response.text().catch(() => '')
+        failOver(next, `${call.response.status} ${detail.slice(0, 300)}`)
+        continue pathLoop
+      }
       break pathLoop
     }
   }
@@ -281,7 +293,7 @@ chat.post('/v1/chat/completions', async (c) => {
   const upstream = call.response
   if (!upstream.ok) {
     // OM-07 : le corps d'erreur upstream n'est jamais relayé (divulgation provider/
-    // routing/internals) — détail loggé côté serveur, schéma stable côté appelant,
+    // routing/internals) - détail loggé côté serveur, schéma stable côté appelant,
     // statut conservé.
     const text = await upstream.text().catch(() => '')
     log.warn('upstream_not_ok', {
@@ -294,7 +306,7 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // ── Streaming: pipe through + inter-chunk watchdog ─────────────────────────
   // Passthrough byte-à-byte sur le chemin OpenRouter (pas d'adaptStream) ; un provider
-  // direct peut adapter le flux (injection du usage.cost synthétisé — le contrat
+  // direct peut adapter le flux (injection du usage.cost synthétisé - le contrat
   // « le caller parse son usage dans le dernier chunk » vaut aussi en stream).
   if (isStream && upstream.body) {
     let upstreamBody = provider.adaptStream
@@ -318,7 +330,7 @@ chat.post('/v1/chat/completions', async (c) => {
     let lastChunkAt = Date.now()
     let stalled = false
     // P0-7 : garantit UNE observation au plus, quelle que soit la sortie (fin upstream
-    // ou cancel client) — l'ancien code n'enregistrait RIEN sur cancel, trou dans le
+    // ou cancel client) - l'ancien code n'enregistrait RIEN sur cancel, trou dans le
     // signal bandit/metering.
     let observed = false
 
@@ -368,11 +380,11 @@ chat.post('/v1/chat/completions', async (c) => {
         clearInterval(watchdog)
         call.abort.abort()
         reader.cancel(reason).catch(() => {})
-        // P0-7 : enregistrer l'observation PARTIELLE (usage scanné jusqu'ici) — sinon
+        // P0-7 : enregistrer l'observation PARTIELLE (usage scanné jusqu'ici) - sinon
         // un cancel client laisse la requête invisible au bandit/metering. error:false :
         // un désabonnement client n'est pas une panne du modèle. Le champ `aborted` du
         // log distingue ce cas d'une fin normale (pas de champ RequestRecord dédié en
-        // v0 — décision E-4/decision-log ultérieure).
+        // v0 - décision E-4/decision-log ultérieure).
         if (!observed) {
           observed = true
           log.info('completed', {
