@@ -91,9 +91,22 @@ export function fastCandidates(): string[] | null {
 
 // Image generation is a /v1/chat/completions call with modalities:['image','text']
 // (OpenRouter contract). When a caller asks for image output via `auto` (rather than
-// pinning a concrete image model), the router resolves to this model — a text tier
+// pinning a concrete image model), the router resolves to the image slot — a text tier
 // would be wrong. Image gen is part of bloc A (OpenMulti owns it), cf ARCHITECTURE.md.
-export const IMAGE_MODEL = process.env.OPENMULTI_MODEL_IMAGE || 'google/gemini-2.5-flash-image'
+/**
+ * Candidats de la génération d'image — slot `image`, même précédence que `fast` :
+ * override admin (à chaud) > fichier catalogue > env pluriel > env singulier
+ * (OPENMULTI_MODEL_IMAGE, le nom historique) > défaut neutre. Le PREMIER est servi
+ * (sélection déterministe : pas de bandit coût/santé sur la qualité d'image).
+ */
+export function imageCandidates(): string[] {
+  return (
+    catalogOverride('image') ??
+    catalogFileSlot('image') ??
+    envList('OPENMULTI_MODELS_IMAGE') ??
+    [process.env.OPENMULTI_MODEL_IMAGE || 'google/gemini-2.5-flash-image']
+  )
+}
 
 // Modèle d'embeddings par défaut quand l'appelant envoie model:'auto' sur
 // /v1/embeddings. Id vérifié sur openrouter.ai/collections/embedding-models
@@ -156,7 +169,7 @@ export function catalogModels(): CatalogEntry[] {
     }
   }
 
-  add(IMAGE_MODEL, undefined, 'image')
+  for (const m of imageCandidates()) add(m, undefined, 'image')
   add(EMBEDDING_MODEL, undefined, 'embedding')
   return [...map.values()]
 }

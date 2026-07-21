@@ -2,7 +2,7 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { candidatesFor, fastCandidates, IMAGE_MODEL, DEFAULT_TIER, isTier } from './catalog.js'
+import { candidatesFor, fastCandidates, imageCandidates, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
 import { resolveBareModel, resolveFamilyModel } from './model-alias.js'
 import { config } from './config.js'
@@ -175,7 +175,8 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   // request that wants image output needs an image-capable model, not a text tier.
   // (A caller that pinned a concrete image model is already handled above.)
   if (Array.isArray(req.modalities) && req.modalities.includes('image')) {
-    return { model: IMAGE_MODEL, reason: 'image generation', candidates: [IMAGE_MODEL] }
+    const img = imageCandidates()
+    return { model: img[0]!, reason: 'image generation', candidates: img }
   }
 
   // Le canal `openmulti.tier` transporte la cible VERBATIM des clients MULTI

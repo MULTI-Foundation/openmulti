@@ -92,6 +92,23 @@ test('/admin/catalog: expose `priced` (badge « non tarifé ») et le slot `fast
   assert.ok(Array.isArray(body.priced))
   assert.ok(body.priced.includes('moonshotai/kimi-k2.6'))
   assert.deepEqual(body.effective.fast, [])
+  // Slot `image` : jamais vide (défaut neutre intégré), le 1er est servi aux
+  // appels modalities:['image'].
+  assert.deepEqual(body.effective.image, ['google/gemini-2.5-flash-image'])
+})
+
+test('routage image: le slot `image` (env) pilote modalities:[image]', async () => {
+  const { route } = await import('../src/router.ts')
+  process.env.OPENMULTI_MODELS_IMAGE = 'vendori/pix-1,vendori/pix-2'
+  try {
+    const d = route({ model: 'auto', messages: [], modalities: ['image'] })
+    assert.equal(d.model, 'vendori/pix-1') // le 1er est servi — pas de bandit sur l'image
+    assert.deepEqual(d.candidates, ['vendori/pix-1', 'vendori/pix-2'])
+  } finally {
+    delete process.env.OPENMULTI_MODELS_IMAGE
+  }
+  // Sans override : le défaut neutre historique, inchangé (contrat MyMULTI).
+  assert.equal(route({ model: 'auto', messages: [], modalities: ['image'] }).model, 'google/gemini-2.5-flash-image')
 })
 
 test('setCatalogSlot: le slot `fast` passe la validation de nom (piloté par l\'admin)', async () => {
@@ -101,4 +118,7 @@ test('setCatalogSlot: le slot `fast` passe la validation de nom (piloté par l\'
   assert.ok(err === null || !err.includes('invalid slot'), String(err))
   // Le slot s'appelle `fast` — `fastest` (le mot du langage) n'est PAS un nom de slot.
   assert.match(String(await setCatalogSlot('fastest', ['x/y'])), /invalid slot/)
+  // `image` est un slot valide lui aussi (génération d'image pilotée par l'admin).
+  const errImg = await setCatalogSlot('image', ['google/gemini-2.5-flash-image'])
+  assert.ok(errImg === null || !errImg.includes('invalid slot'), String(errImg))
 })

@@ -14,7 +14,7 @@
 // demande, la résolution reste pure et testable via le paramètre `ids`.
 
 import { pricedModelIds } from './pricing.js'
-import { catalogModels, candidatesFor, IMAGE_MODEL, EMBEDDING_MODEL } from './catalog.js'
+import { catalogModels, candidatesFor, imageCandidates, EMBEDDING_MODEL } from './catalog.js'
 
 export type BareModelResolution =
   | { kind: 'resolved'; model: string }
@@ -25,7 +25,7 @@ export type BareModelResolution =
 export function knownModelIds(): string[] {
   const s = new Set<string>(pricedModelIds())
   for (const e of catalogModels()) s.add(e.model)
-  s.add(IMAGE_MODEL)
+  for (const m of imageCandidates()) s.add(m)
   s.add(EMBEDDING_MODEL)
   return [...s]
 }
