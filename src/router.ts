@@ -2,9 +2,10 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { candidatesFor, fastCandidates, imageCandidates, DEFAULT_TIER, isTier } from './catalog.js'
+import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
 import { resolveBareModel, resolveFamilyModel } from './model-alias.js'
+import { isVisionCapable } from './vision.js'
 import { config } from './config.js'
 import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js'
 
@@ -18,12 +19,25 @@ import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js
 export class RouteRefusal extends Error {
   readonly status = 400 as const
   constructor(
-    readonly code: 'model_unknown' | 'model_ambiguous' | 'objective_unavailable',
+    readonly code: 'model_unknown' | 'model_ambiguous' | 'objective_unavailable' | 'model_not_vision' | 'no_vision_model',
     message: string,
   ) {
     super(message)
     this.name = 'RouteRefusal'
   }
+}
+
+/** Vrai si un message porte une IMAGE en entrée (content part `image_url`, format
+ * OpenAI). C'est la modalité d'ENTRÉE — rien à voir avec `modalities` (la sortie). */
+export function hasImageInput(req: ChatRequest): boolean {
+  for (const msg of req.messages ?? []) {
+    const content = (msg as { content?: unknown })?.content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'image_url') return true
+    }
+  }
+  return false
 }
 
 // "auto", "auto:economy", "auto:quality" -> tier (if encoded in the alias).
@@ -144,15 +158,45 @@ function resolvePinnedName(word: string, refuseUnknown = true): RouteDecision | 
  * servir en 400 structuré.
  */
 export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteDecision {
+  // Modalité d'ENTRÉE (chantier vision 2026-07-21) : une image dans les messages
+  // contraint le routage aux modèles vision-capables (référentiel vision.ts — feed
+  // OpenRouter). Référentiel ABSENT (null) = aucun filtrage, comportement historique
+  // (mode dégradé assumé : une panne du feed ne coupe jamais le trafic). Données
+  // présentes = strict : jamais un modèle aveugle servi en silence (le bug mesuré en
+  // prod : réponse vide facturée).
+  const needsVision = hasImageInput(req)
+  const guardVisionPin = (model: string, what: string): void => {
+    if (needsVision && isVisionCapable(model) === false) {
+      throw new RouteRefusal(
+        'model_not_vision',
+        `request has image input but ${what} "${model}" does not accept images — pin a vision-capable model or use "auto"`,
+      )
+    }
+  }
+
   const allow = req.openmulti?.allow
   if (allow && allow.length > 0) {
-    return { model: allow[0]!, reason: `pinned to caller allowlist (${allow.length} allowed)`, candidates: [allow[0]!] }
+    // Contrainte dure + image : le premier membre VISION de l'allowlist (quand le
+    // référentiel existe) ; aucun -> refus explicite.
+    let chosen = allow[0]!
+    if (needsVision) {
+      const sighted = allow.find((m) => isVisionCapable(m) !== false)
+      if (sighted === undefined) {
+        throw new RouteRefusal(
+          'model_not_vision',
+          `request has image input but none of the allowed models (${allow.join(', ')}) accepts images`,
+        )
+      }
+      chosen = sighted
+    }
+    return { model: chosen, reason: `pinned to caller allowlist (${allow.length} allowed)`, candidates: [chosen] }
   }
 
   const alias = tierFromModelAlias(req.model)
   const looksConcrete =
     typeof req.model === 'string' && req.model !== 'auto' && alias === null && req.model.includes('/')
   if (looksConcrete) {
+    guardVisionPin(req.model as string, 'pinned model')
     return { model: req.model as string, reason: 'caller pinned a concrete model', candidates: [req.model as string] }
   }
 
@@ -168,7 +212,10 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   const modelNamed = modelWord !== null ? resolveNamedTarget(modelWord) : null
   if (modelWord !== null && modelNamed === null) {
     const pinned = resolvePinnedName(modelWord)
-    if (pinned) return pinned
+    if (pinned) {
+      guardVisionPin(pinned.model, 'model')
+      return pinned
+    }
   }
 
   // Image generation is a chat completion with image modality. An `auto`/tier
@@ -195,7 +242,10 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
       named = resolveNamedTarget(rawTier)
       if (named === null) {
         const pinned = resolvePinnedName(rawTier, /* refuseUnknown */ false)
-        if (pinned) return pinned
+        if (pinned) {
+          guardVisionPin(pinned.model, 'model')
+          return pinned
+        }
       }
     }
     tier = named?.tier ?? alias ?? DEFAULT_TIER
@@ -208,6 +258,30 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   // le tier ; sinon, les candidats du (tier, purpose) comme toujours.
   const manual = named?.candidates
   let candidates = manual ?? candidatesFor(tier, purpose)
+
+  // Filtre vision (référentiel présent seulement) : les candidats aveugles sont
+  // écartés ; plus AUCUN candidat -> repli EXPLICITE sur le slot `vision`, tracé dans
+  // reason ; slot vide -> refus clair. Le slot est de la curation d'exploitation
+  // (admin > fichier > env), on lui fait confiance sans re-filtrer.
+  let visionNote: string | null = null
+  if (needsVision) {
+    const sighted = candidates.filter((m) => isVisionCapable(m) !== false)
+    if (sighted.length !== candidates.length && sighted.length > 0) {
+      candidates = sighted
+      visionNote = 'vision-capable only'
+    } else if (sighted.length === 0) {
+      const slot = visionCandidates()
+      if (slot && slot.length > 0) {
+        candidates = slot
+        visionNote = 'vision fallback (slot vision)'
+      } else {
+        throw new RouteRefusal(
+          'no_vision_model',
+          `request has image input but no ${tier} candidate accepts images and the "vision" catalog slot is empty — set it (admin) or pin a vision-capable model`,
+        )
+      }
+    }
+  }
   // E-1 : restreindre au snapshot épinglé s'il y a intersection ; sinon garder les
   // candidats courants — le vérificateur du jeton tranchera (candidate_set_mismatch).
   if (constrainTo && constrainTo.length > 0) {
@@ -218,7 +292,7 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
 
   // Une sélection manuelle ne route PAS par tier : la raison ne prétend pas un tier,
   // et le plafond de tokens par tier (OM-01) ne s'applique pas.
-  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, manual ? null : `${tier} tier`, sel.note || null]
+  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, manual ? null : `${tier} tier`, visionNote, sel.note || null]
     .filter(Boolean)
     .join(', ')
 

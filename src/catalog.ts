@@ -94,6 +94,23 @@ export function fastCandidates(): string[] | null {
 // pinning a concrete image model), the router resolves to the image slot — a text tier
 // would be wrong. Image gen is part of bloc A (OpenMulti owns it), cf ARCHITECTURE.md.
 /**
+ * Candidats du REPLI VISION — slot `vision` : quand une requête porte une image en
+ * ENTRÉE et qu'AUCUN candidat du tier n'est vision-capable, le routeur retombe
+ * EXPLICITEMENT ici (jamais un modèle aveugle en silence — le bug mesuré en prod
+ * 2026-07-21 : réponse vide facturée). Même précédence que `fast`, AUCUN défaut
+ * intégré (la curation est de la config d'exploitation) : slot vide + aucun candidat
+ * vision = RouteRefusal('no_vision_model'), erreur claire.
+ */
+export function visionCandidates(): string[] | null {
+  return (
+    catalogOverride('vision') ??
+    catalogFileSlot('vision') ??
+    envList('OPENMULTI_MODELS_VISION') ??
+    (process.env.OPENMULTI_MODEL_VISION ? [process.env.OPENMULTI_MODEL_VISION] : null)
+  )
+}
+
+/**
  * Candidats de la génération d'image — slot `image`, même précédence que `fast` :
  * override admin (à chaud) > fichier catalogue > env pluriel > env singulier
  * (OPENMULTI_MODEL_IMAGE, le nom historique) > défaut neutre. Le PREMIER est servi

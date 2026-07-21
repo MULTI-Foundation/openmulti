@@ -8,6 +8,7 @@ import { initStore } from './store.js'
 import { initKeys } from './keys.js'
 import { initCatalogOverrides } from './catalog-overrides.js'
 import { initCouncilOverrides } from './council-overrides.js'
+import { initVisionModels } from './vision.js'
 import { log } from './log.js'
 
 // Store partagé (metering durable + registre de clés + overrides catalog/council) —
@@ -16,6 +17,9 @@ initStore()
 initKeys()
 initCatalogOverrides()
 initCouncilOverrides()
+// Référentiel vision (feed OpenRouter, rafraîchi 1 h) — fail-open : sans données le
+// routage n'est pas filtré, jamais bloquant pour le boot.
+initVisionModels()
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   log.info('listening', { port: info.port })

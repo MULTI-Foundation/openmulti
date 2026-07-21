@@ -9,7 +9,7 @@ import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../cata
 import { setCouncilSlot, deleteCouncilSlot, councilOverrides } from '../council-overrides.js'
 import { effectiveCouncil } from '../council.js'
 import { catalogFileSlots } from '../catalog-file.js'
-import { candidatesFor, fastCandidates, imageCandidates, isTier } from '../catalog.js'
+import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, isTier } from '../catalog.js'
 import { pricedModelIds } from '../pricing.js'
 import { route, RouteRefusal } from '../router.js'
 import { stageRequest } from '../program-quote.js'
@@ -107,6 +107,9 @@ admin.get('/admin/catalog', (c) => {
       // Slot `image` = le modèle de génération d'image (modalities:['image']) —
       // toujours non vide (défaut neutre intégré), le 1er est servi.
       ['image', imageCandidates()],
+      // Slot `vision` = le REPLI pour les entrées image quand aucun candidat du tier
+      // n'est vision-capable. [] = non configuré (refus clair dans ce cas de repli).
+      ['vision', visionCandidates() ?? []],
     ]),
     // Ids TARIFÉS (pricing.ts) : un modèle hors de cette liste sert les appels mais
     // fait REFUSER les devis (multi explain, /v1/plan) — la console badge « non

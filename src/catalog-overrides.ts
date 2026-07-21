@@ -16,7 +16,7 @@ import { log } from './log.js'
 const SLOTS_KEY = 'catalog:slots'
 const REFRESH_MS = Math.max(1000, Number(process.env.OPENMULTI_KEYS_REFRESH_MS ?? 10_000))
 
-const SLOT_RE = /^(fast|image|([a-z0-9-]+_)?(economy|balanced|quality))$/
+const SLOT_RE = /^(fast|image|vision|([a-z0-9-]+_)?(economy|balanced|quality))$/
 // Charset des ids de modèles (vendor/model, points/tirets/deux-points pour les variantes).
 const MODEL_RE = /^[a-z0-9][a-z0-9._:/-]{1,127}$/i
 

@@ -14,7 +14,7 @@
 // demande, la résolution reste pure et testable via le paramètre `ids`.
 
 import { pricedModelIds } from './pricing.js'
-import { catalogModels, candidatesFor, imageCandidates, EMBEDDING_MODEL } from './catalog.js'
+import { catalogModels, candidatesFor, fastCandidates, imageCandidates, visionCandidates, EMBEDDING_MODEL } from './catalog.js'
 
 export type BareModelResolution =
   | { kind: 'resolved'; model: string }
@@ -26,6 +26,10 @@ export function knownModelIds(): string[] {
   const s = new Set<string>(pricedModelIds())
   for (const e of catalogModels()) s.add(e.model)
   for (const m of imageCandidates()) s.add(m)
+  // Les slots hors tiers (fast, vision) font partie des modèles servis : leurs
+  // membres sont nommables (nom nu/famille) comme les autres.
+  for (const m of fastCandidates() ?? []) s.add(m)
+  for (const m of visionCandidates() ?? []) s.add(m)
   s.add(EMBEDDING_MODEL)
   return [...s]
 }

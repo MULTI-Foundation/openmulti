@@ -10,6 +10,7 @@
 
 import { config } from './config.js'
 import { councilOverrides } from './council-overrides.js'
+import { route, RouteRefusal } from './router.js'
 import { forwardChatNonStream, type ForwardCtx, type ForwardResult } from './forward.js'
 import {
   responseText,
@@ -107,6 +108,20 @@ export async function runCouncil(
   }
   const { panel, chair, mode } = resolved
   const userMessages = req.messages
+
+  // Refus AMONT, jamais une dégradation silencieuse (amendement 4 du chantier
+  // vision) : chaque membre (+ le chair hors compare) doit être ROUTABLE pour CETTE
+  // requête — nom résolvable, vision-capable si image en entrée — AVANT la première
+  // dépense. Sinon un panéliste aveugle « échouerait gracieusement » et le panel
+  // rétrécirait sans le dire. Même pré-validation que le devis (council-quote, E-5).
+  try {
+    for (const m of mode === 'compare' ? panel : [...panel, chair]) route(subRequest(m, userMessages, req))
+  } catch (e) {
+    if (e instanceof RouteRefusal) {
+      return { status: 400, body: { error: { message: e.message, type: 'invalid_request_error', code: e.code } } }
+    }
+    throw e
+  }
 
   // Étape 1 : le panel répond en parallèle (chacun via le routing interne).
   const panelResults = await Promise.all(panel.map((m) => deps.forward(subRequest(m, userMessages, req), ctx)))
