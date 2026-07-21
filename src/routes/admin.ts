@@ -9,7 +9,10 @@ import { setCatalogSlot, deleteCatalogSlot, listCatalogOverrides } from '../cata
 import { setCouncilSlot, deleteCouncilSlot, councilOverrides } from '../council-overrides.js'
 import { effectiveCouncil } from '../council.js'
 import { catalogFileSlots } from '../catalog-file.js'
-import { candidatesFor } from '../catalog.js'
+import { candidatesFor, fastCandidates, isTier } from '../catalog.js'
+import { pricedModelIds } from '../pricing.js'
+import { route, RouteRefusal } from '../router.js'
+import { stageRequest } from '../program-quote.js'
 import { log } from '../log.js'
 import type { AppEnv, Tier } from '../types.js'
 
@@ -98,8 +101,56 @@ admin.get('/admin/catalog', (c) => {
     effective: Object.fromEntries([
       ...tiers.map((t) => [t, candidatesFor(t)]),
       ...tiers.map((t) => [`agent_${t}`, candidatesFor(t, 'agent')]),
+      // Slot `fast` = la sélection MANUELLE de @fastest. [] = non configuré (et
+      // @fastest répond par une erreur claire tant qu'il le reste).
+      ['fast', fastCandidates() ?? []],
     ]),
+    // Ids TARIFÉS (pricing.ts) : un modèle hors de cette liste sert les appels mais
+    // fait REFUSER les devis (multi explain, /v1/plan) — la console badge « non
+    // tarifé » les candidats concernés pour prévenir l'admin avant qu'il ne curate.
+    priced: pricedModelIds().sort(),
   })
+})
+
+// GET /admin/resolve?target=@claude — testeur de résolution : traduit la cible
+// EXACTEMENT comme une étape MULTI (stageRequest, règle §3.4) puis route(), sans
+// aucune dépense ni appel provider. Sert la console admin (« que sert @best en ce
+// moment ? ») ; RouteRefusal ressort en 400 structuré, comme sur toute surface.
+admin.get('/admin/resolve', (c) => {
+  const raw = (c.req.query('target') ?? '').trim()
+  const word = (raw.startsWith('@') ? raw.slice(1) : raw).toLowerCase() // G12 : minuscules, comme le parseur
+  if (!word) {
+    return c.json({ error: { message: '`target` is required (e.g. ?target=@claude)', type: 'invalid_request_error' } }, 400)
+  }
+  try {
+    const decision = route(stageRequest(word, 'x'))
+    // Fidèle à l'exécution, le canal tier REPLIE un mot inconnu sur le tier par
+    // défaut (contrat multi-lang) — un testeur doit le DIRE. Détection sans dupliquer
+    // le routeur : le même mot, présenté comme `model`, est-il refusé inconnu ?
+    // (Les tiers canoniques et `auto` sont exclus : légitimes sur le canal tier,
+    // ils n'existent pas comme noms de modèle.)
+    let fallback = false
+    if (word !== 'auto' && !isTier(word)) {
+      try {
+        route({ model: word, messages: [] })
+      } catch (e) {
+        if (e instanceof RouteRefusal && e.code === 'model_unknown') fallback = true
+        else if (!(e instanceof RouteRefusal)) throw e
+      }
+    }
+    return c.json({
+      target: word,
+      model: decision.model,
+      reason: decision.reason,
+      candidates: decision.candidates ?? [decision.model],
+      fallback,
+    })
+  } catch (e) {
+    if (e instanceof RouteRefusal) {
+      return c.json({ error: { message: e.message, type: 'invalid_request_error', code: e.code } }, e.status)
+    }
+    throw e
+  }
 })
 
 admin.put('/admin/catalog/:slot', async (c) => {

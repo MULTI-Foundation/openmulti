@@ -72,6 +72,23 @@ export function candidatesFor(tier: Tier, purpose?: string): string[] {
   )
 }
 
+/**
+ * Candidats de l'objectif `@fastest` — sélection MANUELLE (décision 2026-07-21) : le
+ * gateway n'observe pas encore la latence, donc « le plus rapide » est une curation
+ * d'exploitation, comme les tiers. Slot `fast` : override admin > fichier local >
+ * env (pluriel puis singulier). AUCUN défaut intégré : non configuré = null, et
+ * @fastest reste refusé avec une erreur claire (router.ts) — jamais un routage
+ * mensonger vers un modèle qui n'a rien de rapide.
+ */
+export function fastCandidates(): string[] | null {
+  return (
+    catalogOverride('fast') ??
+    catalogFileSlot('fast') ??
+    envList('OPENMULTI_MODELS_FAST') ??
+    (process.env.OPENMULTI_MODEL_FAST ? [process.env.OPENMULTI_MODEL_FAST] : null)
+  )
+}
+
 // Image generation is a /v1/chat/completions call with modalities:['image','text']
 // (OpenRouter contract). When a caller asks for image output via `auto` (rather than
 // pinning a concrete image model), the router resolves to this model — a text tier

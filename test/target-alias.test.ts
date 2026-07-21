@@ -111,7 +111,7 @@ test('route: cheapest -> tier economy sous stratégie smart (bandit)', () => {
   assert.ok(d.candidates!.includes('anthropic/claude-haiku-4-5'))
 })
 
-test('route: fastest -> RouteRefusal objective_unavailable (erreur claire, jamais un routage mensonger)', () => {
+test('route: fastest SANS slot fast -> RouteRefusal objective_unavailable (erreur claire, jamais un routage mensonger)', () => {
   for (const req of [
     { model: 'fastest', messages: MSGS },
     { model: 'auto', messages: MSGS, openmulti: { tier: 'fastest' } },
@@ -120,6 +120,21 @@ test('route: fastest -> RouteRefusal objective_unavailable (erreur claire, jamai
       () => route(req),
       (e: unknown) => e instanceof RouteRefusal && e.code === 'objective_unavailable' && e.status === 400,
     )
+  }
+})
+
+test('route: fastest AVEC slot fast -> sélection manuelle (primaire, hors tiers, sans plafond de tier)', () => {
+  process.env.OPENMULTI_MODELS_FAST = 'vendorf/rapid-1,vendorf/rapid-2'
+  try {
+    const d = route({ model: 'fastest', messages: MSGS })
+    assert.equal(d.model, 'vendorf/rapid-1')
+    assert.match(d.reason, /fastest objective \(manual selection\)/)
+    assert.ok(!/tier/.test(d.reason)) // pas de mensonge de tier
+    assert.deepEqual(d.candidates, ['vendorf/rapid-1', 'vendorf/rapid-2'])
+    // Le canal tier (cible multi-lang verbatim) résout pareil.
+    assert.equal(route({ model: 'auto', messages: MSGS, openmulti: { tier: 'fastest' } }).model, 'vendorf/rapid-1')
+  } finally {
+    delete process.env.OPENMULTI_MODELS_FAST
   }
 })
 
@@ -183,7 +198,7 @@ test('/v1/chat/completions: "fastest" -> 400 objective_unavailable SANS appel up
     assert.equal(res.status, 400)
     const body = (await res.json()) as { error: { code: string; message: string } }
     assert.equal(body.error.code, 'objective_unavailable')
-    assert.match(body.error.message, /latency/)
+    assert.match(body.error.message, /"fast" catalog slot/)
     assert.equal(upstreamCalls, 0)
   } finally {
     globalThis.fetch = realFetch

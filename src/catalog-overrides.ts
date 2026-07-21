@@ -5,8 +5,9 @@
 // zéro I/O sur le chemin chaud, refresh périodique + immédiat après mutation locale,
 // multi-pod converge en ≤ un refresh, store down = dernier état connu).
 //
-// Slots : `economy` | `balanced` | `quality` (tier) ou `<purpose>_<tier>`
-// (ex. `agent_balanced`). La précédence vit dans catalog.ts : override > env > défauts.
+// Slots : `economy` | `balanced` | `quality` (tier), `<purpose>_<tier>`
+// (ex. `agent_balanced`), ou `fast` (la sélection MANUELLE de @fastest, en attendant
+// le routage par latence). La précédence vit dans catalog.ts : override > env > défauts.
 
 import { storeClient, storeHealthy } from './store.js'
 import { log } from './log.js'
@@ -14,7 +15,7 @@ import { log } from './log.js'
 const SLOTS_KEY = 'catalog:slots'
 const REFRESH_MS = Math.max(1000, Number(process.env.OPENMULTI_KEYS_REFRESH_MS ?? 10_000))
 
-const SLOT_RE = /^([a-z0-9-]+_)?(economy|balanced|quality)$/
+const SLOT_RE = /^(fast|([a-z0-9-]+_)?(economy|balanced|quality))$/
 // Charset des ids de modèles (vendor/model, points/tirets/deux-points pour les variantes).
 const MODEL_RE = /^[a-z0-9][a-z0-9._:/-]{1,127}$/i
 

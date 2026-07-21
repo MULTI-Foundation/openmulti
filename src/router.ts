@@ -2,7 +2,7 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { candidatesFor, IMAGE_MODEL, DEFAULT_TIER, isTier } from './catalog.js'
+import { candidatesFor, fastCandidates, IMAGE_MODEL, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
 import { resolveBareModel, resolveFamilyModel } from './model-alias.js'
 import { config } from './config.js'
@@ -42,7 +42,10 @@ function tierFromModelAlias(model: string | undefined): Tier | null {
  * tier economy. Cette stratégie d'objectif prime sur `openmulti.route` et sur
  * OPENMULTI_DEFAULT_ROUTE : l'objectif est la demande la plus explicite. */
 interface NamedTarget {
-  tier: Tier
+  tier?: Tier
+  /** Candidats IMPOSÉS (hors tiers) — `fastest` : la sélection manuelle du slot
+   * `fast` (catalog.ts), en attendant le routage par latence. */
+  candidates?: string[]
   strategy?: RouteStrategy
   label: string
 }
@@ -55,14 +58,20 @@ const NAMED_TARGETS: Record<string, NamedTarget> = {
   cheapest: { tier: 'economy', strategy: 'smart', label: 'cheapest objective' },
 }
 
-/** Résout un mot-cible nommé ; `fastest` est CONNU mais refusé tant que le gateway
- * n'observe pas la latence — une erreur claire vaut mieux qu'un routage mensonger. */
+/** Résout un mot-cible nommé. `fastest` route vers la sélection MANUELLE du slot
+ * `fast` (le gateway n'observe pas encore la latence — la curation d'exploitation
+ * tient lieu de « plus rapide », décision 2026-07-21) ; slot vide = refus clair,
+ * jamais un routage mensonger vers un modèle qui n'a rien de rapide. */
 function resolveNamedTarget(word: string): NamedTarget | null {
   if (word === 'fastest') {
-    throw new RouteRefusal(
-      'objective_unavailable',
-      'objective "fastest" is not available yet (no latency data) — use "auto", "cheapest", "best", or a tier',
-    )
+    const fast = fastCandidates()
+    if (!fast || fast.length === 0) {
+      throw new RouteRefusal(
+        'objective_unavailable',
+        'objective "fastest" has no selection yet — set the "fast" catalog slot (admin), or use "auto", "cheapest", "best", or a tier',
+      )
+    }
+    return { candidates: fast, label: 'fastest objective (manual selection)' }
   }
   return NAMED_TARGETS[word] ?? null
 }
@@ -194,7 +203,10 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   const purpose = req.openmulti?.purpose
   const strategy: RouteStrategy =
     named?.strategy ?? (req.openmulti?.route === 'smart' ? 'smart' : config.defaultRoute)
-  let candidates = candidatesFor(tier, purpose)
+  // Candidats manuels d'une cible nommée (`fastest` -> slot `fast`) : ils remplacent
+  // le tier ; sinon, les candidats du (tier, purpose) comme toujours.
+  const manual = named?.candidates
+  let candidates = manual ?? candidatesFor(tier, purpose)
   // E-1 : restreindre au snapshot épinglé s'il y a intersection ; sinon garder les
   // candidats courants — le vérificateur du jeton tranchera (candidate_set_mismatch).
   if (constrainTo && constrainTo.length > 0) {
@@ -203,12 +215,14 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   }
   const sel = selectModel(candidates, strategy)
 
-  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, `${tier} tier`, sel.note || null]
+  // Une sélection manuelle ne route PAS par tier : la raison ne prétend pas un tier,
+  // et le plafond de tokens par tier (OM-01) ne s'applique pas.
+  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, manual ? null : `${tier} tier`, sel.note || null]
     .filter(Boolean)
     .join(', ')
 
   // OM-01: optional per-tier max_tokens ceiling (tier is 'economy'|'balanced'|'quality',
   // so the env name is safe to build directly). 0/unset disables it.
-  const ceiling = Number(process.env[`OPENMULTI_MAX_TOKENS_${tier.toUpperCase()}`] ?? 0)
+  const ceiling = manual ? 0 : Number(process.env[`OPENMULTI_MAX_TOKENS_${tier.toUpperCase()}`] ?? 0)
   return { model: sel.model, reason, maxTokensCeiling: ceiling > 0 ? ceiling : undefined, candidates }
 }
