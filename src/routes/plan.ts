@@ -82,9 +82,12 @@ plan.post('/v1/plan', async (c) => {
       })
     }
     // E-1 : jeton signé seulement si le devis est GARANTI — un contrat de paiement sur
-    // une borne non garantie (stdin non borné) pourrait être dépassé à l'exécution.
+    // une borne non garantie (stdin non borné) pourrait être dépassé à l'exécution —
+    // ET si le programme est CONTRACTABLE : un étage groupe s'exécute en appel council,
+    // que le vérificateur de jeton refuse (chat.ts, 422) — émettre un jeton invérifiable
+    // serait un faux contrat (le devis EXPLAIN, lui, reste servi).
     let quoteToken: string | undefined
-    if (config.quoteToken.secret && pq.guaranteed) {
+    if (config.quoteToken.secret && pq.guaranteed && pq.contractable) {
       quoteToken = issueQuoteToken({
         kind: 'program',
         digest: programQuoteDigest(validated.program, stdinBytes, maxTokens),

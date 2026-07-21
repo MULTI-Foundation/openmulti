@@ -9,7 +9,10 @@ export type RouteStrategy = 'default' | 'smart'
 
 /** The OpenMulti extension block a caller may attach to a chat request. */
 export interface OpenMultiExtension {
-  tier?: Tier
+  /** Un tier canonique — ou la cible MULTI verbatim (les clients multi-lang envoient
+   * `@cible` telle quelle : niveau `light|mid|max`, objectif `best|cheapest|fastest`,
+   * nom nu `kimi-k2.6` ou famille `claude`). Résolution dans route(). */
+  tier?: Tier | (string & {})
   purpose?: Purpose
   /** Hard constraint: pick only within these concrete model IDs. */
   allow?: string[]
@@ -41,8 +44,10 @@ export interface CouncilRequest {
   panel?: string[]
   /** Modèle juge/synthétiseur (chair). Défaut : OPENMULTI_COUNCIL_CHAIR. */
   chair?: string
-  /** 'fuse' (panel -> chair, défaut) | 'deliberate' (panel -> revue pairs -> chair). */
-  mode?: 'fuse' | 'deliberate'
+  /** 'fuse' (panel -> chair, défaut) | 'deliberate' (panel -> revue pairs -> chair)
+   * | 'compare' (panel seul, sorties mises en regard SANS synthèse — le COMPARE du
+   * langage MULTI ; aucun chair requis). */
+  mode?: 'fuse' | 'deliberate' | 'compare'
 }
 
 export interface ChatMessage {
