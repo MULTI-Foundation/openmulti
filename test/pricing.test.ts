@@ -76,3 +76,15 @@ test('les modeles du catalogue d\'exploitation sont tarifes (regression smoke 20
     assert.deepEqual(priceFor(model), price, `prix manquant/different pour ${model}`)
   }
 })
+
+test('gpt-oss-120b : tarifé (base ET variante :nitro), borne = pire provider du pool', () => {
+  // Le slot `fast` de prod pointe ce modèle ; sans entrée de prix, les devis de
+  // @fastest refuseraient. La variante :nitro (tri débit OpenRouter) doit être
+  // tarifée à l'identique — même pool de providers, mêmes prix par provider.
+  const base = priceFor('openai/gpt-oss-120b')
+  const nitro = priceFor('openai/gpt-oss-120b:nitro')
+  assert.ok(base && nitro)
+  assert.deepEqual(base, nitro)
+  assert.equal(base!.inputPerMTok, 0.35)
+  assert.equal(base!.outputPerMTok, 0.95)
+})

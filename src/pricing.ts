@@ -54,6 +54,14 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'openai/gpt-5': { inputPerMTok: 1.25, outputPerMTok: 10 },
   'openai/gpt-4.1': { inputPerMTok: 2, outputPerMTok: 8 },
   'openai/gpt-4o-mini': { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+  // gpt-oss-120b (open-weight, multi-provider OpenRouter) — vérifié le 2026-07-21 sur
+  // openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints. BORNE = pire provider
+  // du pool (input 0.35 Cerebras, output 0.95 SambaNova) : notre steering
+  // provider.sort=throughput peut élire n'importe lequel, le devis doit couvrir le
+  // pire cas. La variante `:nitro` (tri débit côté OpenRouter) sert le MÊME pool aux
+  // mêmes prix par provider — même borne.
+  'openai/gpt-oss-120b': { inputPerMTok: 0.35, outputPerMTok: 0.95 },
+  'openai/gpt-oss-120b:nitro': { inputPerMTok: 0.35, outputPerMTok: 0.95 },
 
   // DeepSeek direct — vérifié le 2026-06-22 sur api-docs.deepseek.com/quick_start/pricing
   // (prix = cache MISS). deepseek-chat/-reasoner mappent v4-flash.
