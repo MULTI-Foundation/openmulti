@@ -14,6 +14,7 @@ import { forwardChatNonStream, type ForwardCtx, type ForwardResult } from './for
 import {
   responseText,
   anonymizeResponses,
+  formatComparison,
   buildReviewMessages,
   buildSynthesisMessages,
   aggregateUsage,
@@ -30,8 +31,9 @@ const MODEL_RE = /^[a-z0-9][a-z0-9._:/-]{1,127}$/i
 
 export interface CouncilResolved {
   panel: string[]
+  /** Vide en mode `compare` (aucune synthèse, donc aucun chair requis ni utilisé). */
   chair: string
-  mode: 'fuse' | 'deliberate'
+  mode: 'fuse' | 'deliberate' | 'compare'
 }
 
 /** Config council effective : override admin à chaud (Redis) > env. Source unique
@@ -67,8 +69,11 @@ export function resolveCouncil(req: ChatRequest): CouncilResolved | { error: str
   const panel = rawPanel.filter((m): m is string => typeof m === 'string' && MODEL_RE.test(m)).slice(0, MAX_PANEL)
   // Preset flash : chair rapide (chairFlash) s'il est configuré ; override de requête prime.
   const chair = c.chair || (preset === 'flash' && eff.chairFlash ? eff.chairFlash : eff.chair)
-  const mode = c.mode === 'deliberate' ? 'deliberate' : 'fuse'
+  const mode = c.mode === 'deliberate' ? 'deliberate' : c.mode === 'compare' ? 'compare' : 'fuse'
   if (!panel.length) return { error: 'council: no panel (set OPENMULTI_COUNCIL_PANEL_* or openmulti.council.panel)' }
+  // `compare` ne synthétise pas : pas de chair requis, et un chair configuré est
+  // IGNORÉ (chair vide dans le résolu — jamais un appel de synthèse payé pour rien).
+  if (mode === 'compare') return { panel, chair: '', mode }
   if (!chair) return { error: 'council: no chair (set OPENMULTI_COUNCIL_CHAIR or openmulti.council.chair)' }
   return { panel, chair, mode }
 }
@@ -133,20 +138,28 @@ export async function runCouncil(
     }
   }
 
-  // Étape 3 : le chair synthétise.
-  const chairRes = await deps.forward(subRequest(chair, buildSynthesisMessages(userMessages, anon, reviews), req), ctx)
+  // Étape 3 : la sortie finale. `compare` : les réponses survivantes mises EN REGARD,
+  // chacune sous son modèle résolu — aucune synthèse, aucun appel de plus. Sinon : le
+  // chair synthétise.
   let finalText: string
-  if (chairRes.ok && responseText(chairRes.data).trim()) {
-    finalText = responseText(chairRes.data)
-    usageParts.push((chairRes.data?.usage as UsagePart) ?? {})
+  let chairUsed: string | null = null
+  if (mode === 'compare') {
+    finalText = formatComparison(okPanel.map((r) => r.model), texts)
   } else {
-    // Dégradation gracieuse : le chair a échoué. Faute de synthèse, on rend la réponse
-    // survivante la PLUS LONGUE — proxy grossier mais honnête d'un signal de contenu
-    // (P0-4 : pas de « meilleure » sans juge ; l'ancien texts[0] = premier survivant
-    // dans l'ordre de config, sans aucun signal de qualité). texts est non vide
-    // (okPanel.length >= 1 garanti plus haut).
-    log.warn('council_chair_failed', { key: ctx.key, chair, status: chairRes.status })
-    finalText = texts.reduce((a, b) => (b.length > a.length ? b : a))
+    const chairRes = await deps.forward(subRequest(chair, buildSynthesisMessages(userMessages, anon, reviews), req), ctx)
+    if (chairRes.ok && responseText(chairRes.data).trim()) {
+      finalText = responseText(chairRes.data)
+      usageParts.push((chairRes.data?.usage as UsagePart) ?? {})
+      chairUsed = chair
+    } else {
+      // Dégradation gracieuse : le chair a échoué. Faute de synthèse, on rend la réponse
+      // survivante la PLUS LONGUE — proxy grossier mais honnête d'un signal de contenu
+      // (P0-4 : pas de « meilleure » sans juge ; l'ancien texts[0] = premier survivant
+      // dans l'ordre de config, sans aucun signal de qualité). texts est non vide
+      // (okPanel.length >= 1 garanti plus haut).
+      log.warn('council_chair_failed', { key: ctx.key, chair, status: chairRes.status })
+      finalText = texts.reduce((a, b) => (b.length > a.length ? b : a))
+    }
   }
 
   const usage = aggregateUsage(usageParts)
@@ -163,8 +176,8 @@ export async function runCouncil(
   // Trace council uniquement si l'appelant a opté pour l'extension (réponse pure-OpenAI sinon).
   if (req.openmulti) {
     body.openmulti = {
-      council: { mode, panel: okPanel.map((r) => r.model), chair: chairRes.ok ? chair : null, members: okPanel.length },
-      reason: `council ${mode}: ${okPanel.length} panel + chair`,
+      council: { mode, panel: okPanel.map((r) => r.model), chair: chairUsed, members: okPanel.length },
+      reason: `council ${mode}: ${okPanel.length} panel${mode === 'compare' ? '' : ' + chair'}`,
     }
   }
   return { status: 200, body }

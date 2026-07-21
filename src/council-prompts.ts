@@ -23,6 +23,14 @@ export function anonymizeResponses(texts: string[]): string {
   return texts.map((t, i) => `### Response ${String.fromCharCode(65 + i)}\n${t.trim()}`).join('\n\n')
 }
 
+/** Mode `compare` (le COMPARE du langage MULTI) : les réponses sont mises EN REGARD,
+ * chacune sous le nom du modèle qui l'a produite — l'inverse exact de l'anonymisation
+ * (ici on VEUT voir qui dit quoi ; aucune synthèse, aucun juge). Pure : la borne de
+ * sortie du devis (council-quote) est dérivée de CE gabarit rendu à vide. */
+export function formatComparison(models: string[], texts: string[]): string {
+  return models.map((m, i) => `### ${m}\n\n${(texts[i] ?? '').trim()}`).join('\n\n---\n\n')
+}
+
 /** Dernier message utilisateur (contexte synthétique pour les prompts juge/chair). */
 function lastUserText(messages: unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

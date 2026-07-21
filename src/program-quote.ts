@@ -25,15 +25,31 @@
 // devis : des bornes ou rien.
 
 import { computeQuote, type Quote, type QuoteUnavailable } from './plan.js'
+import { computeCouncilQuote } from './council-quote.js'
 import { route } from './router.js'
 import { canonicalJson } from './quote-token.js'
-import type { ChatRequest, OpenMultiExtension, Tier } from './types.js'
+import type { ChatRequest, OpenMultiExtension } from './types.js'
 
 // ── Forme du programme (miroir strict de multi-lang parser.py / validate_program) ──
 
-export interface ProgramStage {
+export interface ProgramSingleStage {
   target: string | null
   prompt: string
+}
+
+/** v0.3 : étage GROUPE `@a AND @b "prompt" FUSION|COMPARE` — cibles en parallèle sur
+ * le même prompt, sorties synthétisées (fusion) ou mises en regard (compare). Exécuté
+ * comme UN appel council (mode fuse/compare), donc UN étage du devis. */
+export interface ProgramGroupStage {
+  targets: string[]
+  prompt: string
+  combine: 'fusion' | 'compare'
+}
+
+export type ProgramStage = ProgramSingleStage | ProgramGroupStage
+
+export function isGroupStage(stage: ProgramStage): stage is ProgramGroupStage {
+  return 'targets' in stage
 }
 
 export interface ProgramStatement {
@@ -51,9 +67,12 @@ export interface ProgramLimits {
   maxScriptBytes: number
   maxStatements: number
   maxStages: number
+  /** v0.3 : taille max d'un groupe — alignée sur MAX_PANEL du council (chaque cible
+   * du groupe devient un membre du panel) et sur parser.py max_group_targets. */
+  maxGroupTargets: number
 }
 
-export const PROGRAM_LIMITS: ProgramLimits = { maxScriptBytes: 65_536, maxStatements: 128, maxStages: 32 }
+export const PROGRAM_LIMITS: ProgramLimits = { maxScriptBytes: 65_536, maxStatements: 128, maxStages: 32, maxGroupTargets: 8 }
 
 // ── Mesure canonique (H8, obligation 10 — alignement de la comptabilité d'octets) ──
 //
@@ -141,13 +160,30 @@ export function validateProgram(input: unknown, limits: ProgramLimits = PROGRAM_
     const stages: ProgramStage[] = []
     for (const stage of rawStages) {
       if (!isPlainObject(stage)) return fail('stage non-objet')
+      const prompt = stage.prompt
+      if (typeof prompt !== 'string' || !prompt.trim()) return fail('prompt vide ou manquant')
+      if (LONE_SURROGATE.test(prompt)) return fail('prompt mal formé (substitut UTF-16 isolé)')
+      if ('targets' in stage || 'combine' in stage) {
+        // v0.3 : étage GROUPE {targets, prompt, combine} — jamais mêlé à la forme
+        // simple, mêmes règles exactes que la porte AST de référence (runtime.py).
+        const extraGroup = unknownKey(stage, ['targets', 'prompt', 'combine'])
+        if (extraGroup) return fail(`champ inconnu dans une stage groupe: ${extraGroup}`)
+        const targets = stage.targets
+        if (!Array.isArray(targets) || targets.length < 2 || targets.length > limits.maxGroupTargets) {
+          return fail(`targets invalide (liste de 2 à ${limits.maxGroupTargets} cibles attendue)`)
+        }
+        if (!targets.every((t): t is string => typeof t === 'string' && IDENT_RE.test(t))) {
+          return fail('cible de groupe invalide')
+        }
+        const combine = stage.combine
+        if (combine !== 'fusion' && combine !== 'compare') return fail('combine invalide (fusion|compare attendu)')
+        stages.push({ targets: targets.map((t) => t.toLowerCase()), prompt, combine })
+        continue
+      }
       const extraStage = unknownKey(stage, ['target', 'prompt'])
       if (extraStage) return fail(`champ inconnu dans une stage: ${extraStage}`)
       const target = stage.target ?? null
       if (target !== null && !(typeof target === 'string' && IDENT_RE.test(target))) return fail('target invalide')
-      const prompt = stage.prompt
-      if (typeof prompt !== 'string' || !prompt.trim()) return fail('prompt vide ou manquant')
-      if (LONE_SURROGATE.test(prompt)) return fail('prompt mal formé (substitut UTF-16 isolé)')
       stages.push({ target: typeof target === 'string' ? target.toLowerCase() : null, prompt })
     }
     if (source === null && stages.length === 0) return fail('pipeline sans source ni stage')
@@ -189,9 +225,26 @@ export function stageRequest(target: string | null, prompt: string, maxTokens?: 
     req.model = target
   } else {
     req.model = 'auto'
-    openmulti.tier = target as Tier // tier inconnu = fallback serveur (isTier dans route())
+    openmulti.tier = target // cible verbatim : tier/niveau/objectif/nom nu résolus par route()
   }
   req.openmulti = openmulti
+  if (maxTokens !== undefined) req.max_tokens = maxTokens
+  return req
+}
+
+/**
+ * MÊME traduction qu'un étage groupe du client multi-lang (client.py
+ * build_group_request) : UN appel council, panel = cibles VERBATIM (chacune résolue
+ * par route() en sous-requête), mode fuse (fusion) ou compare. Gabarit rendu sans
+ * l'entrée, comme stageRequest — l'entrée du pipe est comptée en tokens via
+ * l'extraInputTokens de computeCouncilQuote.
+ */
+export function groupStageRequest(stage: ProgramGroupStage, maxTokens?: number): ChatRequest {
+  const req: ChatRequest = {
+    model: 'council',
+    messages: [{ role: 'user', content: `${stage.prompt}\n\n` }],
+    openmulti: { council: { panel: stage.targets, mode: stage.combine === 'fusion' ? 'fuse' : 'compare' } },
+  }
   if (maxTokens !== undefined) req.max_tokens = maxTokens
   return req
 }
@@ -213,7 +266,17 @@ export interface ProgramStageQuote {
 }
 
 export type ProgramQuoteResult =
-  | { stages: ProgramStageQuote[]; quote: Quote; guaranteed: boolean; candidates: string[] }
+  | {
+      stages: ProgramStageQuote[]
+      quote: Quote
+      guaranteed: boolean
+      candidates: string[]
+      /** false = le programme contient un étage GROUPE : le devis est une borne valide
+       * (EXPLAIN), mais un jeton E-1 ne doit PAS être émis — l'exécution d'un groupe
+       * est un appel council, et chat.ts refuse (422) tout quote_token sur un council.
+       * Lever cette limite = apprendre au vérificateur les étages council, pas ici. */
+      contractable: boolean
+    }
   | { refused: { statement: number; stage: number; target: string | null; model: string; reason: QuoteUnavailable } }
   | { error: string }
 
@@ -237,6 +300,7 @@ export function computeProgramQuote(
   const candidateSet = new Set<string>()
   const total: Quote = { input_tokens_max: 0, output_tokens_max: 0, max_cost_usd: 0 }
   let allGuaranteed = true
+  let hasGroupStage = false
 
   for (let si = 0; si < program.statements.length; si++) {
     const stmt = program.statements[si]!
@@ -253,6 +317,30 @@ export function computeProgramQuote(
 
     for (let ki = 0; ki < stmt.stages.length; ki++) {
       const st = stmt.stages[ki]!
+
+      // v0.3 : étage GROUPE = UN appel council — le fan-out parallèle et sa borne
+      // vivent dans computeCouncilQuote (fusion : N+chair ; compare : N seul). Le
+      // pliage aval utilise le cap de RÉPONSE (chair ou mise en regard), jamais la
+      // somme facturée de tous les sous-appels.
+      if (isGroupStage(st)) {
+        const cq = computeCouncilQuote(groupStageRequest(st, opts.maxTokens), opts.marginFactor, current.tokens)
+        if ('error' in cq) return { error: cq.error }
+        const label = st.targets.join(' AND ')
+        if (!cq.quote) {
+          return { refused: { statement: si, stage: ki, target: label, model: 'council', reason: cq.unavailable! } }
+        }
+        for (const cand of cq.candidates ?? []) candidateSet.add(cand)
+        const groupGuaranteed = current.guaranteed
+        allGuaranteed &&= groupGuaranteed
+        hasGroupStage = true
+        stages.push({ statement: si, stage: ki, target: label, model: 'council', ...cq.quote, guaranteed: groupGuaranteed })
+        total.input_tokens_max += cq.quote.input_tokens_max
+        total.output_tokens_max += cq.quote.output_tokens_max
+        total.max_cost_usd += cq.quote.max_cost_usd
+        current = { tokens: cq.response_tokens_max!, guaranteed: true }
+        continue
+      }
+
       const req = stageRequest(st.target, st.prompt, opts.maxTokens)
       const decision = route(req)
       const q = computeQuote(req, decision.model, decision.maxTokensCeiling, opts.marginFactor, current.tokens)
@@ -282,5 +370,5 @@ export function computeProgramQuote(
 
   // Somme de bornes déjà arrondies au micro-dollar SUPÉRIEUR : reste une borne (E-5).
   total.max_cost_usd = Math.round(total.max_cost_usd * 1_000_000) / 1_000_000
-  return { stages, quote: total, guaranteed: allGuaranteed, candidates: [...candidateSet].sort() }
+  return { stages, quote: total, guaranteed: allGuaranteed, candidates: [...candidateSet].sort(), contractable: !hasGroupStage }
 }
