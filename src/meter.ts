@@ -16,7 +16,7 @@
 
 import { storeClient, storeHealthy, _setStoreClientForTests, type StoreClient } from './store.js'
 import { log } from './log.js'
-import { recordMeterDrop } from './metrics.js'
+import { recordMeterDrop, labelModel } from './metrics.js'
 import { usdToMicro, microToUsd } from './micro-usd.js'
 import type { RequestRecord } from './metrics.js'
 
@@ -44,7 +44,15 @@ export function meterUsage(r: RequestRecord): void {
     return
   }
   const key = meterKey(r.key, meterDay())
-  const f = (metric: string) => `${r.model}|${r.provider ?? 'openrouter'}|${metric}`
+  // F8 : `r.model` peut être un id épinglé par l'appelant (router honore tout `vendor/model`),
+  // donc potentiellement porteur de '|' ou d'un flot d'ids uniques. On le borne à l'allowlist
+  // connue (repli 'other') AVANT d'en faire un champ `{model}|{provider}|{metric}` : sinon un
+  // '|' injecté casse le split de readUsage et des ids uniques créent des champs sans limite
+  // (TTL ~400 j) dans le store partagé. La compta projet (spent:microusd, ci-dessous) est
+  // clé par projet, jamais par modèle — collapser vers 'other' garde les totaux justes, seule
+  // la ventilation par modèle d'un abuseur retombe sur 'other'.
+  const model = labelModel(r.model)
+  const f = (metric: string) => `${model}|${r.provider ?? 'openrouter'}|${metric}`
   const writes: Promise<unknown>[] = [c.hIncrBy(key, f('requests'), 1)]
   if (r.error) writes.push(c.hIncrBy(key, f('errors'), 1))
   if (r.promptTokens) writes.push(c.hIncrBy(key, f('prompt_tokens'), r.promptTokens))

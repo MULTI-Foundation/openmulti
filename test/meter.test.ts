@@ -11,7 +11,7 @@ process.env.OPENROUTER_API_KEY ||= 'test-upstream-key'
 process.env.OPENMULTI_METRICS_TOKEN = 'ops-token-test'
 
 const { meterUsage, readUsage, meterDay, _setMeterClientForTests } = await import('../src/meter.ts')
-const { renderProm, _resetMetrics } = await import('../src/metrics.ts')
+const { renderProm, _resetMetrics, _setKnownModelsForTest } = await import('../src/metrics.ts')
 const { app } = await import('../src/app.ts')
 
 // Client fake : hash map en mémoire, mêmes signatures que le sous-ensemble utilisé.
@@ -63,6 +63,11 @@ let client: ReturnType<typeof fakeClient>
 
 beforeEach(() => {
   _resetMetrics()
+  // F8 : meterUsage borne désormais le model à l'allowlist connue (repli 'other') avant
+  // d'en faire un champ de hash. Les ids synthétiques de ces tests de schéma sont déclarés
+  // connus ici pour qu'ils gardent leur id (l'intention = verrouiller le schéma d'écriture) ;
+  // le collapse d'un id INCONNU (le cas d'abus) a son propre test dédié plus bas.
+  _setKnownModelsForTest(['a/1', 'b/2', 'm/1', 'free/model'])
   client = fakeClient()
   _setMeterClientForTests(client)
 })
@@ -164,4 +169,33 @@ test('admin/usage: token ops strict requis, rapport servi avec', async () => {
   assert.equal(all.status, 200)
   const report2 = await all.json()
   assert.ok(report2.projects.proj, 'le projet doit apparaitre dans la vue globale')
+})
+
+test('F8: un model INCONNU epingle par l\'appelant est collapse sur "other" (pas de | injecte, pas de champs sans limite)', async () => {
+  // Un abuseur épingle des ids uniques porteurs de '|' : sans borne, chaque requête crée
+  // un champ durable (TTL ~400 j) dans le store partagé et le '|' casserait le split de
+  // readUsage. Le model est borné à 'other' AVANT de construire le champ.
+  meterUsage({ key: 'proj', model: 'x/y|billed_microusd', provider: 'openrouter', costUsd: 0.001 })
+  for (let i = 0; i < 50; i++) meterUsage({ key: 'proj', model: `x/uuid-${i}`, provider: 'openrouter', costUsd: 0.001 })
+  await settle()
+  const h = client.store.get(`meter:proj:${meterDay()}`)!
+  // Tous collapsent sur la MÊME série 'other|openrouter' : cardinalité bornée.
+  assert.equal(h.get('other|openrouter|requests'), 51)
+  // Aucun champ ne porte un id d'attaque ni un '|' injecté par l'appelant.
+  for (const field of h.keys()) {
+    assert.ok(!field.includes('uuid-'), `un id inconnu a fui dans un champ meter: ${field}`)
+    assert.ok(field.split('|').length === 3, `un '|' injecte a corrompu le schema du champ: ${field}`)
+  }
+  // La compta projet (base du solde prépayé) reste juste : keyée par projet, pas par modèle.
+  assert.equal(client.store.get('spent:microusd')?.get('proj'), undefined, 'pas de billedUsd ici, ledger intact')
+})
+
+test('F8: readUsage regroupe l\'abus sous other|provider sans corruption de serie', async () => {
+  meterUsage({ key: 'proj', model: 'x/a|errors', provider: 'openrouter', costUsd: 0.002 })
+  meterUsage({ key: 'proj', model: 'x/b|requests', provider: 'openrouter', costUsd: 0.003 })
+  await settle()
+  const report = (await readUsage('proj', 7))!
+  assert.equal(report.totals.requests, 2, 'les deux requetes sont bien comptees')
+  assert.ok(report.byModel['other|openrouter'], 'la serie abusive est regroupee sous other|openrouter')
+  assert.equal(report.byModel['other|openrouter']!.requests, 2)
 })

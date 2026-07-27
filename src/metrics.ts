@@ -60,7 +60,10 @@ export function _resetKnownModels(): void {
 export function _setKnownModelsForTest(ids: string[]): void {
   knownModelsCache = new Set(ids)
 }
-function labelModel(model: string): string {
+// Exporté (F8) : meter.ts borne le même id de modèle avant d'en faire un champ de hash
+// durable (un id épinglé par l'appelant, potentiellement porteur de '|', corromprait la
+// ventilation par modèle et créerait des champs sans limite dans le store partagé).
+export function labelModel(model: string): string {
   return knownModels().has(model) ? model : 'other'
 }
 
@@ -114,7 +117,16 @@ export function recordRetry(key: string, model: string, provider = DEFAULT_PROVI
 // zéro, mais le trou doit rester visible — c'est un prix à ajouter, pas un détail).
 const pricingMisses = new Map<string, number>()
 
+// F9 : contrairement aux autres Maps, on NE collapse PAS sur 'other' ici — l'id réel EST
+// le signal (l'ops doit savoir quel modèle ajouter à pricing.ts). Un trou de tarif n'est
+// enregistré que si un provider DIRECT a réellement SERVI le modèle (bornant l'espace des
+// ids à ce que le vendeur accepte, cf F9 : difficile à piloter avec des ids poubelle). On
+// garde donc l'id, avec un simple cap de taille en backstop mémoire : passé le plafond, on
+// n'ajoute plus de nouvel id (les compteurs existants continuent de monter).
+const MAX_PRICING_MISS_IDS = 256
+
 export function recordPricingMiss(model: string): void {
+  if (!pricingMisses.has(model) && pricingMisses.size >= MAX_PRICING_MISS_IDS) return
   pricingMisses.set(model, (pricingMisses.get(model) ?? 0) + 1)
 }
 
@@ -140,7 +152,10 @@ export function recordFieldStripped(): void {
 const pathFallbacks = new Map<string, number>()
 
 export function recordPathFallback(model: string, from: string, to: string): void {
-  const id = `${model}${SEP}${from}${SEP}${to}`
+  // F9 : même borne que stats/bandit — `model` peut être un id épinglé par l'appelant,
+  // et un failover se déclenche à chaque 4xx d'un chemin direct, donc un flot d'ids
+  // uniques ferait grossir cette Map (et la cardinalité /metrics) sans limite.
+  const id = `${labelModel(model)}${SEP}${from}${SEP}${to}`
   pathFallbacks.set(id, (pathFallbacks.get(id) ?? 0) + 1)
 }
 
