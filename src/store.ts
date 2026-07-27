@@ -20,7 +20,11 @@ export interface StoreClient {
   // OPTIONNELLES pour ne pas casser les fakes de test existants : le signup est
   // fail-closed et traite un client sans ces méthodes comme un store indisponible.
   get?(key: string): Promise<string | null>
-  set?(key: string, value: string, opts?: { EX?: number }): Promise<unknown>
+  // NX : ne pose la clé que si absente (redis SET ... NX) — retourne 'OK' si posée, null
+  // sinon. Sert à la création idempotente du projet signup (F5, set-if-absent).
+  set?(key: string, value: string, opts?: { EX?: number; NX?: boolean }): Promise<unknown>
+  // del retourne le nombre de clés supprimées (redis DEL : 1 si présente, 0 sinon) — la
+  // réclamation atomique du code signup à usage unique en dépend (F5).
   del?(key: string): Promise<unknown>
   // Scripts Lua (mutations multi-clés atomiques, cf addCredits). Optionnelle : un
   // client sans eval retombe sur le chemin historique en deux temps.

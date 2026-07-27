@@ -66,11 +66,15 @@ function fakeClient() {
     async get(k: string) {
       return kv.get(k) ?? null
     },
-    async set(k: string, v: string) {
+    // Sémantique redis SET : NX ne pose que si absent -> 'OK' / null (F5). Sans NX, pose et 'OK'.
+    async set(k: string, v: string, opts?: { EX?: number; NX?: boolean }) {
+      if (opts?.NX && kv.has(k)) return null
       kv.set(k, v)
+      return 'OK'
     },
+    // Sémantique redis DEL : retourne le nombre de clés supprimées (1 si présente, 0 sinon).
     async del(k: string) {
-      kv.delete(k)
+      return kv.delete(k) ? 1 : 0
     },
   }
 }
@@ -142,6 +146,23 @@ test('le code est à usage unique : rejouer le même code échoue', async () => 
   const code = lastCode()
   assert.equal((await post('/signup/verify', { email: 'once@example.com', code })).status, 201)
   assert.equal((await post('/signup/verify', { email: 'once@example.com', code })).status, 400)
+})
+
+test('F5: deux /verify CONCURRENTS avec le même code -> une seule clé/projet, l\'autre 400', async () => {
+  // TOCTOU : sans réclamation atomique du code (DEL testé) + création SET-NX du projet, N
+  // verifies concurrents passaient tous le safeHashEqual avant le premier del et mintaient
+  // N clés sur N projets d'un seul code (free-tier multiplié). Ici : exactement une réussite.
+  await post('/signup', { email: 'race@example.com' })
+  const code = lastCode()
+  const [a, b] = await Promise.all([
+    post('/signup/verify', { email: 'race@example.com', code }),
+    post('/signup/verify', { email: 'race@example.com', code }),
+  ])
+  assert.deepEqual([a.status, b.status].sort(), [201, 400], 'exactement un 201 et un 400')
+  // Une seule clé mintée et un seul projet mappé pour ce code.
+  assert.equal(client.hashes.get('keys:registry')?.size ?? 0, 1, 'un seul sk_ pour un seul code')
+  const projectMappings = [...client.kv.keys()].filter((k) => k.startsWith('signup:project:'))
+  assert.equal(projectMappings.length, 1, 'un seul projet mappé')
 })
 
 test('rotation : re-signup du même email = nouvelle clé, MÊME projet, cap admin intact', async () => {

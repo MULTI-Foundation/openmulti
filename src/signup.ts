@@ -192,16 +192,32 @@ export async function verifySignup(rawEmail: string, rawCode: string, ip: string
       return { ok: false, status: 400 }
     }
 
-    // Code bon : usage unique.
-    await c.del(pendingKey)
+    // Code bon : usage unique — RÉCLAMATION ATOMIQUE (F5). DEL renvoie le nombre de clés
+    // supprimées : exactement UN concurrent porteur du même code voit 1, les autres voient 0
+    // (la clé a déjà disparu). Sans ce test, N requêtes concurrentes passaient toutes le
+    // safeHashEqual avant le premier del et mintaient N clés/projets d'un seul code. Le
+    // perdant est traité comme un code déjà consommé (400 générique, anti-énumération).
+    const claimed = await c.del(pendingKey)
+    if (!claimed) return { ok: false, status: 400 }
 
     // Une identité email = un projet, pour toujours (nouvelle clé du même projet sinon).
+    // Création SET-IF-ABSENT (F5) : deux créations concurrentes (ou une rotation qui court
+    // avec un nouveau signup) convergent vers UN projet — le perdant du NX relit celui du
+    // gagnant au lieu d'en minter un second. isNewProject (cap par défaut) reste juste : seul
+    // le gagnant du NX voit une pose réussie, donc pose le cap ; une re-vérif d'un projet
+    // existant ne l'écrase pas.
     const projectKey = `${PROJECT_PREFIX}${hash}`
-    let project = await c.get(projectKey)
-    const isNewProject = !project
-    if (!project) {
-      project = `${SIGNUP_PROJECT_PREFIX}${randomBytes(5).toString('hex')}`
-      await c.set(projectKey, project)
+    const candidate = `${SIGNUP_PROJECT_PREFIX}${randomBytes(5).toString('hex')}`
+    const posed = await c.set(projectKey, candidate, { NX: true })
+    let project: string
+    let isNewProject: boolean
+    if (posed) {
+      project = candidate
+      isNewProject = true
+    } else {
+      // Le projet existe déjà (utilisateur de retour, ou concurrent qui a gagné le NX).
+      project = (await c.get(projectKey)) ?? candidate
+      isNewProject = false
     }
 
     // Le cap par défaut n'est posé QU'À la création du projet : une re-vérification
