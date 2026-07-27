@@ -13,10 +13,11 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { meterUsage } from '../meter.js'
-import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor } from '../keys.js'
+import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor, reserveSpend, isMetered } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import { runCouncil } from '../council.js'
+import { computeCouncilQuote } from '../council-quote.js'
 import { computeQuote } from '../plan.js'
 import { PRICING_TABLE_VERSION } from '../pricing.js'
 import { chatQuoteDigest, checkPinnedProgramStage, checkPinnedQuote, decodeQuoteToken, stripQuoteToken, type QuoteTokenClaims } from '../quote-token.js'
@@ -106,8 +107,43 @@ chat.post('/v1/chat/completions', async (c) => {
     if (req.stream === true) {
       return c.json({ error: { message: 'streaming is not supported with council yet', type: 'invalid_request_error' } }, 400)
     }
-    const { status, body } = await runCouncil(req, { key, marginFactor: 1 + marginFor(key) / 100 })
-    return c.json(body, status as 200)
+    const councilMargin = 1 + marginFor(key) / 100
+    // F6 : le council fan-out jusqu'à ~2N+1 appels payés sous UN seul snapshot
+    // d'autorisation. On réserve le devis council COMPLET avant le fan-out et on re-vérifie
+    // solde/plafond, de sorte qu'un council concurrent voie l'engagement en cours (plus de
+    // N councils simultanés qui dépassent chacun). Libéré après runCouncil (chaque sous-appel
+    // a enregistré son coût réel via forward.ts). Non métré ou devis indisponible (membre
+    // non quotable) → pas de réservation, même dégradation gracieuse que le chat.
+    let releaseCouncil: () => void = () => {}
+    if (isMetered(key)) {
+      const cq = computeCouncilQuote(req, councilMargin)
+      const reserveUsd = 'error' in cq ? 0 : cq.quote?.max_cost_usd ?? 0
+      if (reserveUsd > 0) {
+        const bal = checkBalance(key)
+        if (bal.blocked) {
+          return c.json(
+            { error: { message: `Insufficient credits (balance: ${bal.balanceUsd?.toFixed(4)} USD) - top up your account.${topupHint}`, type: 'insufficient_credits' } },
+            402,
+          )
+        }
+        const cp = checkSpendCap(key)
+        if (cp.blocked) {
+          log.warn('spend_cap_blocked', { key, capUsd: cp.capUsd, spentUsd: cp.spentUsd })
+          return c.json(
+            { error: { message: `Daily spend cap reached (${cp.spentUsd?.toFixed(4)}/${cp.capUsd} USD)`, type: 'spend_cap_exceeded' } },
+            429,
+            { 'Retry-After': String(secondsToUtcMidnight()) },
+          )
+        }
+        releaseCouncil = reserveSpend(key, reserveUsd)
+      }
+    }
+    try {
+      const { status, body } = await runCouncil(req, { key, marginFactor: councilMargin })
+      return c.json(body, status as 200)
+    } finally {
+      releaseCouncil()
+    }
   }
 
   // E-1 : le routage sous contrat est CONTRAINT au snapshot de candidats du devis -
@@ -210,6 +246,48 @@ chat.post('/v1/chat/completions', async (c) => {
     failedOver = true
   }
 
+  // F2/F4/F10 : réservation de dépense. Pour un projet MÉTRÉ (plafond ou solde prépayé), on
+  // réserve le coût MAX estimé (le devis, marge incluse) AVANT le dispatch, après une
+  // re-vérif au plus près : la fenêtre check-then-act est fermée car (vérif + réservation)
+  // est atomique — aucun await ne les sépare du premier provider.call. La mienne n'est posée
+  // qu'APRÈS la vérif, donc une requête solitaire passe (comportement historique), mais N
+  // requêtes concurrentes voient chacune les réservations des précédentes. Non métré (clé de
+  // confiance : MyMULTI, dev) → aucune réservation, fail-open préservé. Devis indisponible
+  // (image, prix par palier/thinking) → pas de réservation : la race subsiste pour cette
+  // classe étroite, jamais un blocage optimiste d'un coût non bornable.
+  let releaseReservation: () => void = () => {}
+  if (isMetered(key)) {
+    const q = computeQuote(pin ? stripQuoteToken(req) : req, decision.model, decision.maxTokensCeiling, marginFactor)
+    const reserveUsd = q.quote?.max_cost_usd ?? 0
+    if (reserveUsd > 0) {
+      const bal = checkBalance(key)
+      if (bal.blocked) {
+        return c.json(
+          { error: { message: `Insufficient credits (balance: ${bal.balanceUsd?.toFixed(4)} USD) - top up your account.${topupHint}`, type: 'insufficient_credits' } },
+          402,
+        )
+      }
+      const cp = checkSpendCap(key)
+      if (cp.blocked) {
+        log.warn('spend_cap_blocked', { key, capUsd: cp.capUsd, spentUsd: cp.spentUsd })
+        return c.json(
+          { error: { message: `Daily spend cap reached (${cp.spentUsd?.toFixed(4)}/${cp.capUsd} USD)`, type: 'spend_cap_exceeded' } },
+          429,
+          { 'Retry-After': String(secondsToUtcMidnight()) },
+        )
+      }
+      releaseReservation = reserveSpend(key, reserveUsd)
+    }
+  }
+
+  // Observation TERMINALE : enregistre puis libère la réservation en vol (le coût réel vient
+  // de remplacer l'estimation). failOver garde record() sans libérer — observation NON
+  // terminale, la requête continue sur le chemin suivant et la réservation doit tenir.
+  const settle = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
+    record(r)
+    releaseReservation()
+  }
+
   pathLoop: for (let p = 0; p < paths.length; p++) {
     provider = paths[p]!
     const next = paths[p + 1]
@@ -228,7 +306,7 @@ chat.post('/v1/chat/completions', async (c) => {
         // l'appelant relance s'il le veut (nouvelle exécution, nouveau paiement).
         if (pin) {
           log.error('upstream_error_contract_no_retry', { key, model: decision.model, provider: provider.name, reason, durationMs: Date.now() - startedAt })
-          record({ error: true, durationMs: Date.now() - startedAt })
+          settle({ error: true, durationMs: Date.now() - startedAt })
           return c.json({ error: { message: `${reason} - no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
         }
         if (attempt < config.maxRetries) {
@@ -243,7 +321,7 @@ chat.post('/v1/chat/completions', async (c) => {
           continue pathLoop
         }
         log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-        record({ error: true, durationMs: Date.now() - startedAt })
+        settle({ error: true, durationMs: Date.now() - startedAt })
         return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
       }
 
@@ -300,7 +378,7 @@ chat.post('/v1/chat/completions', async (c) => {
       key, model: decision.model, provider: provider.name, status: upstream.status, failedOver,
       upstreamBody: text.slice(0, 500), durationMs: Date.now() - startedAt,
     })
-    record({ error: true, durationMs: Date.now() - startedAt })
+    settle({ error: true, durationMs: Date.now() - startedAt })
     return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
   }
 
@@ -360,7 +438,7 @@ chat.post('/v1/chat/completions', async (c) => {
           })
           if (!observed) {
             observed = true
-            record({
+            settle({
               error: errored,
               promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
               // le scanner lit le flux APRÈS la marge : on retrouve le coût brut
@@ -392,7 +470,7 @@ chat.post('/v1/chat/completions', async (c) => {
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             cost: scanner.usage?.cost, durationMs: Date.now() - startedAt,
           })
-          record({
+          settle({
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
             costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
             durationMs: Date.now() - startedAt,
@@ -415,7 +493,16 @@ chat.post('/v1/chat/completions', async (c) => {
 
   // ── Non-stream: parse, normalize (identity on the OpenRouter path), attach the
   // route decision, return ─────────────────────────────────────────────────────
-  let data = provider.normalizeResponse((await upstream.json()) as Record<string, unknown>, decision.model)
+  // F2/F4/F10 : un corps upstream malformé (json() jette) ne doit pas fuiter la réservation
+  // en vol — on la libère avant de laisser l'exception remonter (comportement 500 inchangé).
+  let upstreamJson: Record<string, unknown>
+  try {
+    upstreamJson = (await upstream.json()) as Record<string, unknown>
+  } catch (e) {
+    releaseReservation()
+    throw e
+  }
+  let data = provider.normalizeResponse(upstreamJson, decision.model)
   const rawU = data.usage as { prompt_tokens: number; completion_tokens: number; cost?: number } | undefined
   // Marge : le client voit SON prix dans usage.cost (facteur 1 = objet intact).
   if (marginFactor > 1 && rawU && typeof rawU.cost === 'number') {
@@ -427,7 +514,7 @@ chat.post('/v1/chat/completions', async (c) => {
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     cost: u?.cost, durationMs: Date.now() - startedAt,
   })
-  record({
+  settle({
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
     costUsd: u?.cost, durationMs: Date.now() - startedAt,
   })

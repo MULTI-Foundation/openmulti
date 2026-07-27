@@ -55,6 +55,14 @@ let spentTotal = new Map<string, number>() // projet -> cumul facturé (depuis l
 let localBilled = new Map<string, number>() // facturé localement depuis le dernier refresh, µ$
 let spendToday = new Map<string, number>() // projet -> µ$ facturés observés (refresh + local)
 let spendDay = '' // jour UTC du cache de dépense (reset au changement de jour)
+// F2/F4/F10 : réservations de dépense EN VOL — le coût MAX estimé des requêtes admises mais
+// pas encore complétées. Ferme la fenêtre check-then-act : les gardes de solde/plafond les
+// comptent, donc N requêtes concurrentes ne voient plus le même état pré-dépense. Node est
+// mono-thread, donc « lire la garde puis réserver » est atomique tant qu'aucun await ne les
+// sépare (les await de dispatch sont TOUS après la réservation). Libérées à la complétion,
+// où le coût RÉEL est enregistré via noteLocalSpend. µ$ entiers, zéro I/O (même posture que
+// le reste du module). Bornée aux projets métrés (plafond ou solde) — cf reserveSpend.
+let pendingReserved = new Map<string, number>() // projet -> µ$ réservés en vol
 let timer: ReturnType<typeof setInterval> | null = null
 
 export const keyId = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 12)
@@ -162,13 +170,40 @@ export interface CapVerdict {
   spentUsd?: number
 }
 
+/** Le projet est-il soumis à une limite (plafond journalier OU solde prépayé) ? Sinon
+ * (clé de confiance : MyMULTI, dev) il n'y a ni solde ni plafond, donc rien à réserver. */
+export function isMetered(project: string): boolean {
+  return caps.has(project) || credits.has(project)
+}
+
+/** Réserve le coût MAX estimé (µ$ FACTURÉS) d'une requête admise, pour que les gardes de
+ * solde/plafond des requêtes concurrentes le comptent (F2/F4/F10). Retourne un releaser
+ * IDEMPOTENT à appeler à la complétion (une fois le coût réel enregistré). No-op pour un
+ * projet non métré (rien à tenir) ou un montant nul. */
+export function reserveSpend(project: string, billedUsd: number): () => void {
+  if (!isMetered(project)) return () => {}
+  const micro = usdToMicro(billedUsd)
+  if (micro <= 0) return () => {}
+  pendingReserved.set(project, (pendingReserved.get(project) ?? 0) + micro)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const next = (pendingReserved.get(project) ?? 0) - micro
+    if (next > 0) pendingReserved.set(project, next)
+    else pendingReserved.delete(project)
+  }
+}
+
 /** Vérifie le plafond du PROJET (jour UTC courant). Sans plafond, sans store ou sans
- * donnée : fail-open. Purement mémoire — jamais d'I/O sur le chemin de la requête. */
+ * donnée : fail-open. Purement mémoire — jamais d'I/O sur le chemin de la requête. Compte
+ * les réservations en vol (F2/F4/F10) : une requête concurrente déjà admise pèse sur le
+ * plafond avant même d'avoir enregistré son coût réel. */
 export function checkSpendCap(project: string): CapVerdict {
   const cap = caps.get(project)
   if (!cap) return { blocked: false }
   if (meterDay() !== spendDay) return { blocked: false, capUsd: cap, spentUsd: 0 } // jour neuf, refresh pas encore passé
-  const spent = spendToday.get(project) ?? 0 // µ$
+  const spent = (spendToday.get(project) ?? 0) + (pendingReserved.get(project) ?? 0) // µ$
   return { blocked: spent >= usdToMicro(cap), capUsd: cap, spentUsd: microToUsd(spent) }
 }
 
@@ -185,7 +220,11 @@ export interface BalanceVerdict {
 export function checkBalance(project: string): BalanceVerdict {
   const total = credits.get(project)
   if (total === undefined) return { blocked: false }
-  const balance = total - (spentTotal.get(project) ?? 0) - (localBilled.get(project) ?? 0) // µ$ entiers
+  // Réservations en vol comptées (F2/F4/F10) : le solde disponible pour ADMETTRE une
+  // requête de plus tient compte de ce que les requêtes déjà admises peuvent dépenser au
+  // pire, avant même qu'elles aient enregistré leur coût réel via noteLocalSpend.
+  const balance =
+    total - (spentTotal.get(project) ?? 0) - (localBilled.get(project) ?? 0) - (pendingReserved.get(project) ?? 0) // µ$ entiers
   return { blocked: balance <= 0, balanceUsd: microToUsd(balance) }
 }
 
@@ -406,6 +445,7 @@ export function _resetKeysForTests(): void {
   localBilled = new Map()
   spendToday = new Map()
   spendDay = ''
+  pendingReserved = new Map()
   if (timer) clearInterval(timer)
   timer = null
 }
