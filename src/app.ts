@@ -24,7 +24,8 @@ export const app = new Hono<AppEnv>()
 app.get('/health', (c) => c.json({ status: 'ok', service: 'openmulti' }))
 
 // Prometheus metrics. metricsAuth requires a dedicated ops token when configured
-// (OPENMULTI_METRICS_TOKEN), else falls back to caller-key auth (see OM-03).
+// (OPENMULTI_METRICS_TOKEN); without it, fail-closed (503) as soon as any allowlist
+// exists — only the dev open mode falls back to caller-key auth (see OM-03 / F1-F3-F7).
 app.use('/metrics', metricsAuth)
 app.get('/metrics', (c) =>
   c.text(renderProm(), 200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' }),

@@ -42,12 +42,22 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next()
 }
 
-// OM-03: guard for GET /metrics. With OPENMULTI_METRICS_TOKEN set, /metrics requires
-// exactly that token (constant-time) — caller keys are rejected, so a consuming
-// project can no longer read every project's cost/usage. Without it, fall back to the
-// caller-key auth above (unchanged behavior), so this is opt-in and regression-free.
+// OM-03 / F1-F3-F7: guard for GET /metrics. With OPENMULTI_METRICS_TOKEN set, /metrics
+// requires exactly that token (constant-time) — caller keys are rejected, so a consuming
+// project can no longer read every project's cost/usage.
+//
+// Sans token : FAIL-CLOSED dès qu'une allowlist existe (env OU registre dynamique). Une
+// clé appelante ne doit jamais lire /metrics — l'exposition est per-projet (coût, tokens,
+// facturé), donc en multi-tenant (signup ag-*, plusieurs consommateurs) c'est une fuite
+// cross-tenant. Le repli sur l'auth appelante ne subsiste QUE dans le mode open (aucune
+// clé configurée nulle part = dev local), où il n'y a de toute façon pas de tenants à
+// isoler. En prod, le token ops dédié est requis (runbook openmulti-ops).
 export const metricsAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (!config.metricsToken) return auth(c, next)
+  if (!config.metricsToken) {
+    const hasAllowlist = config.apiKeys.length > 0 || registryApiKeys().length > 0
+    if (!hasAllowlist) return auth(c, next) // dev open : pas de tenants, pas de fuite
+    return c.json({ error: { message: 'Metrics endpoint disabled (set OPENMULTI_METRICS_TOKEN)', type: 'metrics_disabled' } }, 503)
+  }
 
   const header = c.req.header('authorization')
   const token = header?.startsWith('Bearer ') ? header.slice(7) : ''

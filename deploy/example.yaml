@@ -59,7 +59,12 @@ spec:
               value: "8388608"
             # - name: OPENMULTI_RATE_LIMIT_PER_MIN   # 0/absent = désactivé
             #   value: "600"
-            # - name: OPENMULTI_METRICS_TOKEN        # token ops dédié pour /metrics + /admin
+            # Token ops dédié pour /metrics + /admin. F1/F3/F7 : SANS lui, /metrics est
+            # FAIL-CLOSED (503) dès qu'une allowlist de clés existe — une clé appelante ne
+            # peut donc PAS lire les métriques per-projet (coût/tokens/facturé) des autres
+            # tenants. En multi-tenant (signup ag-*, plusieurs consommateurs), POSE ce token
+            # pour activer le scrape Prometheus. Le laisser absent est un défaut sûr, pas une fuite.
+            # - name: OPENMULTI_METRICS_TOKEN
             #   valueFrom: { secretKeyRef: { name: openmulti-secrets, key: OPENMULTI_METRICS_TOKEN, optional: true } }
             # ── Metering durable / état partagé (optionnel) : Redis/Valkey. Absent = no-op.
             # - name: REDIS_URL

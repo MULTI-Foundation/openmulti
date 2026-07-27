@@ -15,6 +15,11 @@ import assert from 'node:assert/strict'
 // config.ts exige ces variables au chargement; le mock fetch evite tout appel reel.
 process.env.OPENROUTER_API_KEY ||= 'test-upstream-key'
 process.env.OPENMULTI_API_KEYS ||= 'sk_contract_test'
+// /metrics n'est PAS un point de couplage MyMULTI (surface ops, scrapée via token dédié
+// selon le runbook openmulti-ops ; MyMULTI ne la lit jamais). Depuis F1/F3/F7 elle est
+// fail-closed : sans ce token, une allowlist présente -> 503. On pose donc le token ops
+// pour tester le FORMAT Prometheus (l'objet réel de ces deux cas).
+process.env.OPENMULTI_METRICS_TOKEN ||= 'ops_contract'
 process.env.OPENMULTI_MODEL_BALANCED ||= 'anthropic/claude-sonnet-4-5'
 process.env.OPENMULTI_MODEL_ECONOMY ||= 'anthropic/claude-haiku-4-5'
 process.env.OPENMULTI_MODEL_AGENT_BALANCED ||= 'moonshotai/kimi-k2.6'
@@ -215,14 +220,20 @@ test('retry: une erreur 400 (deterministe) n est PAS reessayee', async () => {
   assert.equal(n, 1)
 })
 
-test('metrics: /metrics exige un bearer valide', async () => {
+test('metrics: /metrics exige le token ops (bearer invalide -> 401)', async () => {
   const res = await app.fetch(new Request('http://test/metrics'))
   assert.equal(res.status, 401)
 })
 
-test('metrics: format prometheus, labelise par projet, jamais le secret brut', async () => {
-  // Les tests precedents ont deja genere du trafic avec KEY -> les series existent.
+test('metrics: F1/F3 une cle appelante ne lit PAS /metrics (fail-closed, fuite cross-tenant)', async () => {
+  // Le durcissement F1/F3/F7 : une clé appelante valide ne suffit plus, seul le token ops.
   const res = await app.fetch(new Request('http://test/metrics', { headers: { authorization: `Bearer ${KEY}` } }))
+  assert.equal(res.status, 401)
+})
+
+test('metrics: format prometheus (via token ops), labelise par projet, jamais le secret brut', async () => {
+  // Les tests precedents ont deja genere du trafic avec KEY -> les series existent.
+  const res = await app.fetch(new Request('http://test/metrics', { headers: { authorization: 'Bearer ops_contract' } }))
   assert.equal(res.status, 200)
   const body = await res.text()
   assert.match(body, /openmulti_requests_total/)
