@@ -25,6 +25,15 @@ import type { RouteStrategy } from './types.js'
 const MIN_SAMPLES = Math.max(1, Number(process.env.OPENMULTI_SMART_MIN_SAMPLES ?? 10))
 const MAX_ERROR_RATE = Math.min(1, Math.max(0, Number(process.env.OPENMULTI_SMART_MAX_ERROR_RATE ?? 0.2)))
 
+// Plancher de re-sonde d'un bras MALSAIN (10x sous le plancher d'exploration) : un bras
+// avec des données et un taux d'erreur au-dessus du seuil ne re-capte du trafic que
+// lorsque son décompte amorti retombe SOUS ce plancher — ~RECOVERY_PROBE_FLOOR/WINDOW du
+// trafic, au lieu de ~MIN_SAMPLES/WINDOW. Vécu prod 2026-07-30 : deux chemins morts à
+// 100 % captaient chacun ~5 % du trafic global via le fallback P0-10 (la décote étant
+// GLOBALE, metrics.ts, chaque requête à N'IMPORTE QUEL modèle fait retomber le bras sous
+// MIN_SAMPLES), d'où l'alerte HighErrorRate sans aucun provider malade.
+const RECOVERY_PROBE_FLOOR = Math.max(0.5, MIN_SAMPLES / 10)
+
 // P0-9 : régime effondré. Avec amortissement actif (window>0), le décompte amorti d'un
 // bras sature à ~window ; si le plancher d'exploration MIN_SAMPLES atteint ou dépasse
 // cet horizon, AUCUN bras ne franchit jamais le plancher -> l'exploration ne se termine
@@ -79,16 +88,20 @@ export function selectModel(
   // P0-10 : le gate de santé s'applique AUSSI ici. Un bras jugé malsain (assez de
   // données ET taux d'erreur amorti > seuil) ne doit pas continuer à capter du trafic
   // d'exploration — décisif en régime effondré, où l'exploit (et son gate) n'est jamais
-  // atteint. On retombe sur TOUS les sous-échantillonnés si aucun n'est sain, pour ne
-  // jamais bloquer : un bras malade isolé garde ainsi sa chance de prouver sa guérison.
+  // atteint. Un bras malade garde sa chance de prouver sa guérison, mais SEULEMENT une
+  // fois retombé sous RECOVERY_PROBE_FLOOR (sonde rare) — sinon un bras mort en
+  // permanence re-capte ~MIN_SAMPLES/WINDOW du trafic à chaque cycle de décote.
   const undersampled = agg.filter((a) => a.requests < MIN_SAMPLES)
   if (undersampled.length) {
     const explorable = undersampled.filter(isHealthy)
-    const pool = explorable.length ? explorable : undersampled
-    let best = pool[0]!
-    for (const a of pool) if (a.requests < best.requests) best = a
-    // best.requests est un décompte amorti, donc fractionnaire — arrondi pour la trace.
-    return { model: best.m, note: `smart: exploring (${best.requests.toFixed(1)}/${MIN_SAMPLES} samples)` }
+    const pool = explorable.length ? explorable : undersampled.filter((a) => a.requests < RECOVERY_PROBE_FLOOR)
+    if (pool.length) {
+      let best = pool[0]!
+      for (const a of pool) if (a.requests < best.requests) best = a
+      // best.requests est un décompte amorti, donc fractionnaire — arrondi pour la trace.
+      return { model: best.m, note: `smart: exploring (${best.requests.toFixed(1)}/${MIN_SAMPLES} samples)` }
+    }
+    // Tous les sous-échantillonnés sont malades et sondés récemment -> exploit.
   }
 
   // 2. Exploit: cheapest among healthy candidates (fall back to all if none healthy).

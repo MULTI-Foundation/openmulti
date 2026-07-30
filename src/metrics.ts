@@ -159,6 +159,15 @@ export function recordPathFallback(model: string, from: string, to: string): voi
   pathFallbacks.set(id, (pathFallbacks.get(id) ?? 0) + 1)
 }
 
+// Quarantaines posées (path-quarantine.ts) — même borne de cardinalité que ci-dessus :
+// labelModel replie les ids inconnus sur 'other'.
+const pathQuarantines = new Map<string, number>()
+
+export function recordPathQuarantine(model: string, provider: string): void {
+  const id = `${labelModel(model)}${SEP}${provider}`
+  pathQuarantines.set(id, (pathQuarantines.get(id) ?? 0) + 1)
+}
+
 export interface ModelAggregate {
   requests: number
   errors: number
@@ -338,6 +347,13 @@ export function renderProm(): string {
     line('openmulti_path_fallback_total', `model="${esc(model)}",from="${esc(from)}",to="${esc(to)}"`, n)
   }
 
+  out.push('# HELP openmulti_path_quarantine_total Access paths quarantined after a path-identity 4xx (401/403/404) for a model.')
+  out.push('# TYPE openmulti_path_quarantine_total counter')
+  for (const [id, n] of pathQuarantines) {
+    const [model, provider] = id.split(SEP) as [string, string]
+    line('openmulti_path_quarantine_total', `model="${esc(model)}",provider="${esc(provider)}"`, n)
+  }
+
   return out.join('\n') + '\n'
 }
 
@@ -347,6 +363,7 @@ export function _resetMetrics(): void {
   bandit.clear()
   pricingMisses.clear()
   pathFallbacks.clear()
+  pathQuarantines.clear()
   meterDrops = 0
   fieldsStripped = 0
   knownModelsCache = null

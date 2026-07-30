@@ -87,6 +87,13 @@ préfixe ≠ provider d'accès** : `anthropic/claude-sonnet-4-5` peut être serv
    est configurée — sinon fallback silencieux sur OpenRouter.
 3. v2 (plus tard) : le bandit arbitre aussi **entre chemins d'accès** du même modèle
    (clé de stats `provider:model` au lieu de `model` dans la vue bandit de `metrics.ts`).
+4. Garde-fous d'éligibilité (vécu prod 2026-07-30) : un id à **variante OpenRouter**
+   (`:nitro`, `:free`, …) n'a jamais de chemin direct (le vendor ne connaît pas cet id) ;
+   et un 401/403/404 d'un chemin direct **quarantaine la paire (chemin, modèle)**
+   pendant `OPENMULTI_PATH_QUARANTINE_TTL_S` (600 s, 0 = coupé) — l'élection repasse sur
+   OpenRouter sans re-payer l'aller-retour perdu (`src/path-quarantine.ts`, compté dans
+   `openmulti_path_quarantine_total`). Les 400/422 (forme de la requête, propre à chaque
+   requête) ne quarantainent pas : le failover par requête les couvre.
 
 Aucun changement côté appelant : MyMULTI continue d'envoyer `auto` + tier, ou un id
 `vendor/model`. Le chemin d'accès est une affaire interne d'OpenMulti, surfacé dans

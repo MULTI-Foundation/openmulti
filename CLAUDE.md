@@ -114,7 +114,11 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   (`OPENMULTI_SMART_DECAY_WINDOW`, horizon in requests, default 200), and one rule — "decayed
   sample count < `MIN_SAMPLES` → explore the least-sampled" — covers both cold-start fill and
   continuous re-sampling of losers (~`MIN_SAMPLES/WINDOW` of traffic each, so data stays fresh and
-  a degraded model can recover). Exploit = cheapest healthy by decayed cost/req, ties → primary.
+  a degraded model can recover). An UNHEALTHY candidate (decayed error rate >
+  `OPENMULTI_SMART_MAX_ERROR_RATE`) is only re-probed once its decayed count falls under a
+  recovery floor (`MIN_SAMPLES`/10, min 0.5) — the decay being GLOBAL, a permanently dead arm
+  would otherwise re-capture ~`MIN_SAMPLES/WINDOW` of ALL traffic (prod incident 2026-07-30,
+  locked by `test/bandit.test.ts`). Exploit = cheapest healthy by decayed cost/req, ties → primary.
   `WINDOW=0` reverts to lifetime stats (explore once, exploit forever — locked by
   `test/select.test.ts`; the bandit by `test/bandit.test.ts`). **Opt-in**: `smart` only runs when a
   caller sends `openmulti.route: 'smart'` or `OPENMULTI_DEFAULT_ROUTE=smart`. With a single
@@ -137,8 +141,15 @@ Moonshot key), the request **fails over to the other path — same model, answer
 see the error, a sick path loses its election) and counted in `openmulti_path_fallback_total`;
 the trace lands in `reason` (`via openrouter (fallback from moonshot)`). Retries/failovers only
 fire *before* any byte reaches the client, so the same loop covers stream and non-stream. Backoff
-is exponential (cap 2s) and honors a sane `Retry-After`. 4xx (except 429) is deterministic and
-returned as-is — no retry, no failover. Counted in `openmulti_retries_total`.
+is exponential (cap 2s) and honors a sane `Retry-After`. 4xx (except 429) is deterministic
+FOR THAT PATH: one failover to the alternate path (native APIs have their own shape/quota
+requirements that OpenRouter normalizes), no same-path retry. Counted in `openmulti_retries_total`.
+A **401/403/404 from a direct path quarantines the (path, model) pair** for
+`OPENMULTI_PATH_QUARANTINE_TTL_S` (default 600 s, 0 = off) — election goes straight to
+OpenRouter instead of re-paying a doomed round-trip (`src/path-quarantine.ts`,
+`openmulti_path_quarantine_total`, locked by `test/path-quarantine.test.ts`); 400/422
+(request shape) never quarantine. Model ids with an OpenRouter variant suffix
+(`:nitro`, `:free`, …) never get a direct path — the vendor doesn't know that id.
 
 ## The contract is law
 

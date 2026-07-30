@@ -12,6 +12,7 @@ import { backoff, normalizedUpstreamError } from '../providers/shared.js'
 import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
+import { markPathUnservable } from '../path-quarantine.js'
 import { meterUsage } from '../meter.js'
 import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor, reserveSpend, isMetered } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
@@ -354,6 +355,9 @@ chat.post('/v1/chat/completions', async (c) => {
       // aussi, son erreur est renvoyée normalement (la requête était en cause).
       if (!call.response.ok && call.response.status < 500 && !provider.isRetryable(call.response.status) && next && !pin) {
         const detail = await call.response.text().catch(() => '')
+        // 401/403/404 = le CHEMIN est en cause (clé, quota, modèle absent du vendor) :
+        // quarantaine de la paire pour que l'élection cesse de payer l'aller-retour perdu.
+        markPathUnservable(provider.name, decision.model, call.response.status)
         failOver(next, `${call.response.status} ${detail.slice(0, 300)}`)
         continue pathLoop
       }
@@ -370,6 +374,11 @@ chat.post('/v1/chat/completions', async (c) => {
 
   const upstream = call.response
   if (!upstream.ok) {
+    // Refus terminal d'identité de chemin (dernier chemin, contrat P0-11 ou fallback
+    // coupé) : même quarantaine — le filtre de statut vit dans markPathUnservable.
+    if (upstream.status < 500 && !provider.isRetryable(upstream.status)) {
+      markPathUnservable(provider.name, decision.model, upstream.status)
+    }
     // OM-07 : le corps d'erreur upstream n'est jamais relayé (divulgation provider/
     // routing/internals) - détail loggé côté serveur, schéma stable côté appelant,
     // statut conservé.

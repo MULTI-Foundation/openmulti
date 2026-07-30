@@ -75,6 +75,41 @@ test('guérison: un modèle malade redevient éligible une fois ses erreurs amor
   assert.ok(bAfter > after.length / 2, `après guérison, b/2 (moins cher) doit redevenir l'élu (${bAfter}/${after.length})`)
 })
 
+test('plancher de guérison: un bras malsain au-dessus du plancher n\'est PAS ré-exploré', () => {
+  // Vécu prod 2026-07-30 : la décote étant GLOBALE, un bras mort retombait sous
+  // MIN_SAMPLES au rythme du trafic global et re-captait ~MIN_SAMPLES/WINDOW du trafic
+  // via le fallback P0-10. Désormais, malsain + au-dessus du plancher -> exploit (bras sain).
+  const agg: Record<string, { requests: number; errors: number; costUsd: number }> = {
+    'a/1': { requests: 50, errors: 0, costUsd: 0.5 },
+    'b/2': { requests: 1.2, errors: 1.2, costUsd: 0 }, // mort (100 % d'erreurs), coût observé nul
+  }
+  const s = selectModel(['a/1', 'b/2'], 'smart', (m) => agg[m]!)
+  assert.equal(s.model, 'a/1', 'le bras mort ne doit pas capter le trafic (même "gratuit")')
+})
+
+test('plancher de guérison: retombé sous le plancher, le bras malsain est re-sondé', () => {
+  const agg: Record<string, { requests: number; errors: number; costUsd: number }> = {
+    'a/1': { requests: 50, errors: 0, costUsd: 0.5 },
+    'b/2': { requests: 0.4, errors: 0.4, costUsd: 0 }, // sous le plancher (MIN_SAMPLES/10, min 0.5)
+  }
+  const s = selectModel(['a/1', 'b/2'], 'smart', (m) => agg[m]!)
+  assert.equal(s.model, 'b/2', 'la sonde de guérison doit subsister')
+})
+
+test('boucle fermée: un bras mort en PERMANENCE ne capte qu\'une part marginale du trafic', () => {
+  // Contrairement au test de guérison (incident borné), b/2 ne guérit jamais — le cas
+  // prod (modèle absent du vendor). Sa part doit rester à ~plancher/WINDOW, pas
+  // ~MIN_SAMPLES/WINDOW.
+  let bPicks = 0
+  for (let i = 0; i < 200; i++) {
+    const s = selectModel(['a/1', 'b/2'], 'smart')
+    if (s.model === 'b/2') bPicks++
+    recordRequest({ key: 'k', model: s.model, costUsd: s.model === 'b/2' ? 0 : 0.01, error: s.model === 'b/2' })
+  }
+  assert.ok(bPicks >= 1, 'la sonde de guérison doit continuer d\'exister')
+  assert.ok(bPicks <= 200 * 0.08, `part du bras mort attendue marginale, obtenu ${bPicks}/200`)
+})
+
 test('récence: un historique pas cher ne masque pas un coût récent élevé', () => {
   // a/1 a un long passé très bon marché puis devient cher ; b/2 est stable à 0.05.
   // Moyenne à vie de a/1 : (100*0.001 + 5*1)/105 ≈ 0.049 < 0.05 -> le legacy

@@ -17,6 +17,7 @@
 
 import { config } from '../config.js'
 import { pathAggregate } from '../metrics.js'
+import { isPathQuarantined } from '../path-quarantine.js'
 import { selectModel } from '../select.js'
 import { openRouterProvider } from './openrouter.js'
 import { moonshotProvider } from './moonshot.js'
@@ -74,12 +75,20 @@ const PATHS: Record<string, Provider> = { openrouter: openRouterProvider }
 for (const v of DIRECT_VENDORS) PATHS[v.provider.name] = v.provider
 
 function activeVendorFor(model: string): ActiveVendor | undefined {
+  // Un suffixe de variante (':nitro', ':free', …) est un routage PROPRE à OpenRouter :
+  // le vendor ne connaît pas cet id, l'appel direct échoue à coup sûr (vécu prod
+  // 2026-07-30 : openai/gpt-oss-120b:nitro élu en direct OpenAI -> 4xx systématique).
+  if (model.includes(':')) return undefined
   return ACTIVE.find((v) => model.startsWith(v.prefix))
 }
 
 export function providerFor(model: string): Provider {
   const v = activeVendorFor(model)
   if (v) {
+    // Quarantaine (path-quarantine.ts) : la paire (chemin direct, modèle) a refusé en
+    // 401/403/404 récemment — un nouvel appel direct échouerait à l'identique (et sous
+    // contrat P0-11, SANS failover). OpenRouter d'office pendant le TTL.
+    if (isPathQuarantined(v.provider.name, model)) return openRouterProvider
     if (v.mode === 'direct') return v.provider
     if (v.mode === 'smart') {
       // Candidats = noms de chemins ; stats = la vue bandit par (chemin, modèle).
