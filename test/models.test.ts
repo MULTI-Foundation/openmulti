@@ -55,6 +55,61 @@ test('liste OpenAI: tiers, purposes, image et alias presents', async () => {
   assert.ok(byId.get('google/gemini-2.5-flash-image')?.openmulti.purposes.includes('image'))
 })
 
+test('?all=1 : inventaire complet (catalogue OpenRouter ∪ tarifes) apres les entrees curees', async () => {
+  // Catalogue OpenRouter mocké — offline, déterministe (même approche que council.test.ts).
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (url: unknown) => {
+    if (String(url).includes('/models')) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'or/alpha', architecture: { output_modalities: ['text'] } },
+            { id: 'or/beta' },
+            { id: 'or/img-only', architecture: { output_modalities: ['image'] } },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }
+    return new Response('{}', { status: 200 })
+  }) as typeof fetch
+  try {
+    const resAll = await app.fetch(
+      new Request('http://test/v1/models?all=1', { headers: { authorization: 'Bearer sk_models_test' } }),
+    )
+    assert.equal(resAll.status, 200)
+    const jAll = await resAll.json()
+    const byId = new Map(jAll.data.map((m: any) => [m.id, m]))
+
+    // l'inventaire OpenRouter est présent (sortie texte uniquement), tiers/purposes vides
+    const alpha = byId.get('or/alpha')
+    assert.ok(alpha, 'modele inventaire absent')
+    assert.deepEqual(alpha.openmulti.tiers, [])
+    assert.deepEqual(alpha.openmulti.purposes, [])
+    assert.equal(alpha.owned_by, 'or')
+    assert.ok(byId.get('or/beta'), 'modele lenient (sans modalites) absent')
+    assert.equal(byId.get('or/img-only'), undefined, 'un generateur image pur ne doit pas etre liste')
+
+    // les ids tarifés hors catalogue sont inclus, avec leur prix vérifié
+    const priced = byId.get('anthropic/claude-opus-4-1')
+    if (priced) assert.ok(priced.openmulti.pricing, 'un id tarife doit porter son prix')
+
+    // les entrées curées gardent leurs métadonnées et ne sont pas dupliquées
+    assert.equal(jAll.data.filter((m: any) => m.id === 'anthropic/claude-sonnet-4-5').length, 1)
+    assert.ok(byId.get('anthropic/claude-sonnet-4-5').openmulti.tiers.includes('balanced'))
+
+    // …et la liste PAR DÉFAUT reste la vitrine curée, sans l'inventaire
+    const resDefault = await app.fetch(
+      new Request('http://test/v1/models', { headers: { authorization: 'Bearer sk_models_test' } }),
+    )
+    const jDefault = await resDefault.json()
+    const defaultIds = new Set(jDefault.data.map((m: any) => m.id))
+    assert.ok(!defaultIds.has('or/alpha'), 'l\'inventaire ne doit pas fuiter sans ?all=1')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
 test('le prix n\'est expose que s\'il est verifie dans la table de synthese', async () => {
   const res = await get('sk_models_test')
   const j = await res.json()

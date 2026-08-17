@@ -68,6 +68,11 @@ pour chacun `openmulti.tiers`, `openmulti.purposes`, et `openmulti.pricing`
 (USD/MTok, uniquement quand le prix est vérifié — chemins directs ; sur le chemin
 OpenRouter, le coût réel arrive par réponse dans `usage.cost`).
 
+`?all=1` (opt-in) ajoute, après les entrées curées, l'**inventaire complet** des
+modèles réellement adressables (catalogue OpenRouter caché 1 h fail-open ∪ modèles
+tarifés) — tiers/purposes vides, prix seulement si vérifié. La liste par défaut
+reste la vitrine curée, inchangée.
+
 ## GET /metrics (ops)
 
 Prometheus, authentifié (token ops dédié ou clé appelante). Compteurs par
