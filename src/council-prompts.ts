@@ -1,18 +1,40 @@
-// Council / fusion (mixture-of-agents) — fonctions PURES de construction de prompts,
+// Council / fusion (mixture-of-agents) - fonctions PURES de construction de prompts,
 // d'anonymisation et d'agrégation d'usage. Aucune I/O : testables isolément (règle
 // projet). L'orchestration (appels parallèles, agrégation) vit dans council.ts.
 
 type Dict = Record<string, unknown>
 
-/** Texte d'une réponse chat.completion (concatène les parts texte). */
+// Markup natif de tool-call fuité EN CLAIR par certains modèles quand la requête n'a
+// pas de `tools` (vécu prod 2026-08-25 : deepseek-v4-pro membre de panel émet un bloc
+// DSML brut, affiché tel quel dans le chat du consommateur). On le retire du texte de
+// réponse AVANT le filtre de survivants : un membre qui n'a produit QUE ce markup est
+// un membre en échec (okPanel l'écarte), pas une réponse à mettre en regard.
+const FW = '｜' // fullwidth vertical line, le délimiteur des tokens spéciaux DeepSeek
+const LEAKED_TOOL_MARKUP = [
+  // Bloc <｜｜DSML｜｜tool_calls> ... </｜｜DSML｜｜tool_calls>, possiblement tronqué en fin de sortie.
+  new RegExp(`<${FW}+DSML${FW}+tool_calls>[\\s\\S]*?(?:</${FW}+DSML${FW}+tool_calls>|$)`, 'g'),
+  // Tags DSML résiduels isolés (invoke/parameter orphelins hors bloc).
+  new RegExp(`</?${FW}+DSML${FW}+[^>]*>`, 'g'),
+]
+
+/** Retire le markup de tool-call fuité (fonction pure, testée isolément). */
+export function stripLeakedToolMarkup(text: string): string {
+  let out = text
+  for (const re of LEAKED_TOOL_MARKUP) out = out.replace(re, '')
+  return out
+}
+
+/** Texte d'une réponse chat.completion (concatène les parts texte, markup fuité retiré). */
 export function responseText(data: unknown): string {
   const d = data as Dict | undefined
   const choices = (d?.choices as Dict[] | undefined) ?? []
   const msg = (choices[0]?.message as Dict | undefined) ?? {}
   const content = msg.content
-  if (typeof content === 'string') return content
+  if (typeof content === 'string') return stripLeakedToolMarkup(content)
   if (Array.isArray(content)) {
-    return content.map((p) => (p && typeof p === 'object' && (p as Dict).type === 'text' ? String((p as Dict).text ?? '') : '')).join('')
+    return stripLeakedToolMarkup(
+      content.map((p) => (p && typeof p === 'object' && (p as Dict).type === 'text' ? String((p as Dict).text ?? '') : '')).join(''),
+    )
   }
   return ''
 }
@@ -24,7 +46,7 @@ export function anonymizeResponses(texts: string[]): string {
 }
 
 /** Mode `compare` (le COMPARE du langage MULTI) : les réponses sont mises EN REGARD,
- * chacune sous le nom du modèle qui l'a produite — l'inverse exact de l'anonymisation
+ * chacune sous le nom du modèle qui l'a produite - l'inverse exact de l'anonymisation
  * (ici on VEUT voir qui dit quoi ; aucune synthèse, aucun juge). Pure : la borne de
  * sortie du devis (council-quote) est dérivée de CE gabarit rendu à vide. */
 export function formatComparison(models: string[], texts: string[]): string {
@@ -61,7 +83,7 @@ const CHAIR_SYSTEM =
   'optionally with peer reviews. Compare them: treat points all or most agree on as higher-confidence consensus, surface ' +
   'contradictions, preserve unique correct insights, and flag blind spots none addressed. Then write the single best, ' +
   'self-contained final answer for the user. Do not mention the council, the candidates, or that multiple models were ' +
-  'consulted — output only the best answer as if you were answering directly.'
+  'consulted - output only the best answer as if you were answering directly.'
 
 /** Messages pour la synthèse finale du chair : conversation d'origine + candidats (+
  * revues). Un message system pose le rôle ; les candidats arrivent en dernier message user. */
