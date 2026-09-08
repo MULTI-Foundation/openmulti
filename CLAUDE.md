@@ -108,6 +108,17 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   catalog file > plural env `OPENMULTI_MODELS_[PURPOSE_]TIER` > singular
   `OPENMULTI_MODEL_[PURPOSE_]TIER` (beware: replaces a whole set with one model) > neutral
   built-in. No consuming project changes a line.
+- **Input modalities** (`src/router.ts` + `src/vision.ts`) — a request carrying an `image_url`
+  part (vision) or an `input_audio` part (audio: a voice note to transcribe/understand) is
+  routed ONLY to models whose OpenRouter feed declares that input modality (`architecture.
+  input_modalities`, strict parser, refreshed hourly, never a hand-written table). Tier
+  candidates that lack the capability are dropped; none left → explicit fallback to the
+  catalog slot `vision` / `audio` (admin > file > env, no built-in default); slot empty →
+  `RouteRefusal('no_vision_model' | 'no_audio_model')`. A pinned/allowlisted model that lacks
+  the capability → `model_not_vision` / `model_not_audio`. Image + audio requires both. No
+  referential data at all (feed never loaded) = no filtering (documented degraded mode).
+  Ops override: `OPENMULTI_VISION_MODELS` / `OPENMULTI_AUDIO_MODELS` (CSV) replace the feed.
+  Locked by `test/vision.test.ts` and `test/audio.test.ts`.
 - **`src/select.ts`** — picks one candidate (the v1 "intelligence" seam). `default` returns the
   first candidate (= iso, the contract-locked behavior); `smart` is a deterministic **discounted
   bandit** (no RNG) over the metrics registry: observed stats decay per observation

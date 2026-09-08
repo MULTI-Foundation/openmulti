@@ -111,7 +111,8 @@ export async function runCouncil(
 
   // Refus AMONT, jamais une dégradation silencieuse (amendement 4 du chantier
   // vision) : chaque membre (+ le chair hors compare) doit être ROUTABLE pour CETTE
-  // requête — nom résolvable, vision-capable si image en entrée — AVANT la première
+  // requête — nom résolvable, vision-capable si image en entrée, audio-capable si
+  // audio en entrée — AVANT la première
   // dépense. Sinon un panéliste aveugle « échouerait gracieusement » et le panel
   // rétrécirait sans le dire. Même pré-validation que le devis (council-quote, E-5).
   try {

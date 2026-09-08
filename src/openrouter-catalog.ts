@@ -38,14 +38,17 @@ export function parseModelIds(body: unknown): string[] {
 }
 
 /**
- * Ids des modèles qui ACCEPTENT l'image en ENTRÉE (vision), dérivés du même feed —
- * jamais d'une table manuelle (leçon E-7 : une table maintenue à la main dérive).
- * STRICT, à l'inverse du lenient de parseModelIds : capacité non déclarée = pas
- * vision. On ne devine pas une capacité — un faux négatif écarte un candidat d'un
- * tier (le slot `vision` rattrape), un faux positif recrée le bug mesuré en prod
- * (réponse vide facturée par un modèle aveugle).
+ * Ids des modèles qui ACCEPTENT une modalité donnée en ENTRÉE (image = vision,
+ * audio = transcription/compréhension audio), dérivés du même feed — jamais d'une
+ * table manuelle (leçon E-7 : une table maintenue à la main dérive). STRICT, à
+ * l'inverse du lenient de parseModelIds : capacité non déclarée = pas capable. On ne
+ * devine pas une capacité — un faux négatif écarte un candidat d'un tier (le slot de
+ * repli rattrape), un faux positif recrée le bug mesuré en prod (réponse vide
+ * facturée par un modèle aveugle/sourd).
  */
-export function parseVisionModelIds(body: unknown): string[] {
+export type InputModality = 'image' | 'audio'
+
+export function parseInputModalityIds(body: unknown, modality: InputModality): string[] {
   if (typeof body !== 'object' || body === null) return []
   const data = (body as { data?: unknown }).data
   if (!Array.isArray(data)) return []
@@ -55,25 +58,36 @@ export function parseVisionModelIds(body: unknown): string[] {
     const arch = m.architecture
     const input = arch?.input_modalities
     if (Array.isArray(input)) {
-      if (input.includes('image')) ids.add(m.id)
+      if (input.includes(modality)) ids.add(m.id)
     } else if (typeof arch?.modality === 'string') {
       // Format `input->output` (ex. `text+image->text`) : on regarde l'ENTRÉE.
       const inMod = arch.modality.split('->')[0] ?? ''
-      if (inMod.includes('image')) ids.add(m.id)
+      if (inMod.includes(modality)) ids.add(m.id)
     }
   }
   return [...ids].sort()
+}
+
+/** Ids vision (image en entrée). */
+export function parseVisionModelIds(body: unknown): string[] {
+  return parseInputModalityIds(body, 'image')
+}
+
+/** Ids audio (audio en entrée : content part `input_audio`). */
+export function parseAudioModelIds(body: unknown): string[] {
+  return parseInputModalityIds(body, 'audio')
 }
 
 const TTL_MS = 60 * 60 * 1000 // 1 h : le catalogue upstream bouge peu
 interface CatalogLists {
   ids: string[]
   visionIds: string[]
+  audioIds: string[]
 }
 let cache: (CatalogLists & { at: number }) | null = null
 let inflight: Promise<CatalogLists> | null = null
 
-/** UN fetch, les deux listes (ids servables + ids vision), cachées 1 h, fail-open :
+/** UN fetch, les trois listes (ids servables + ids vision + ids audio), cachées 1 h, fail-open :
  * OpenRouter injoignable -> dernier état connu, sinon des listes vides. */
 async function fetchCatalogLists(now: number): Promise<CatalogLists> {
   if (cache && now - cache.at < TTL_MS) return cache
@@ -86,15 +100,15 @@ async function fetchCatalogLists(now: number): Promise<CatalogLists> {
       })
       if (!res.ok) {
         log.warn('openrouter_catalog_not_ok', { status: res.status })
-        return cache ?? { ids: [], visionIds: [] }
+        return cache ?? { ids: [], visionIds: [], audioIds: [] }
       }
       const body = (await res.json()) as unknown
-      const lists = { ids: parseModelIds(body), visionIds: parseVisionModelIds(body) }
+      const lists = { ids: parseModelIds(body), visionIds: parseVisionModelIds(body), audioIds: parseAudioModelIds(body) }
       if (lists.ids.length > 0) cache = { ...lists, at: now }
-      return lists.ids.length > 0 ? lists : (cache ?? { ids: [], visionIds: [] })
+      return lists.ids.length > 0 ? lists : (cache ?? { ids: [], visionIds: [], audioIds: [] })
     } catch (e) {
       log.warn('openrouter_catalog_error', { error: e instanceof Error ? e.message : String(e) })
-      return cache ?? { ids: [], visionIds: [] }
+      return cache ?? { ids: [], visionIds: [], audioIds: [] }
     } finally {
       inflight = null
     }
@@ -110,4 +124,9 @@ export async function fetchModelIds(now: number = Date.now()): Promise<string[]>
 /** Ids vision (image en entrée), même cache/fetch que fetchModelIds. */
 export async function fetchVisionModelIds(now: number = Date.now()): Promise<string[]> {
   return (await fetchCatalogLists(now)).visionIds
+}
+
+/** Ids audio (audio en entrée), même cache/fetch que fetchModelIds. */
+export async function fetchAudioModelIds(now: number = Date.now()): Promise<string[]> {
+  return (await fetchCatalogLists(now)).audioIds
 }

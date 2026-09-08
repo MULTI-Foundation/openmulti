@@ -8,7 +8,7 @@
 // keyLabel) times the catalog of models.
 
 import { createHash } from 'node:crypto'
-import { catalogModels, fastCandidates, imageCandidates, visionCandidates, EMBEDDING_MODEL } from './catalog.js'
+import { catalogModels, fastCandidates, imageCandidates, visionCandidates, audioCandidates, EMBEDDING_MODEL } from './catalog.js'
 import { pricedModelIds } from './pricing.js'
 
 interface Stat {
@@ -47,6 +47,7 @@ function knownModels(): Set<string> {
   for (const m of imageCandidates()) s.add(m)
   for (const m of fastCandidates() ?? []) s.add(m)
   for (const m of visionCandidates() ?? []) s.add(m)
+  for (const m of audioCandidates() ?? []) s.add(m)
   s.add(EMBEDDING_MODEL)
   knownModelsCache = s
   return s
