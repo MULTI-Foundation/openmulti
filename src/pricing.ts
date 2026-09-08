@@ -31,6 +31,11 @@ export interface ModelPrice {
    * requête (ENVELOPE §3 AX-OUT classe C, deltas E1/E2) : le cap de sortie ne majore pas
    * la CoT facturée. Facturation best-effort au taux de base ; le devis REFUSE (Q-1). */
   thinking?: true
+  /** USD par SECONDE d'audio en ENTRÉE (content part `input_audio`). Absent = modèle
+   * non tarifé pour l'audio : le devis REFUSE une requête audio (pricing_unknown), la
+   * facturation reste celle du provider (usage.cost). Borne = pire chemin/endpoint,
+   * comme pour le texte. */
+  audioInputPerSecond?: number
 }
 
 // Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
@@ -78,6 +83,12 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'mistralai/mistral-small-latest': { inputPerMTok: 0.1, outputPerMTok: 0.3 },
   'mistralai/codestral-latest': { inputPerMTok: 0.3, outputPerMTok: 0.9 },
   'mistralai/devstral-latest': { inputPerMTok: 0.4, outputPerMTok: 2 },
+  // Voxtral (audio en entrée) — servi via OpenRouter ; vérifié le 2026-09-08 sur
+  // openrouter.ai/api/v1/models/mistralai/voxtral-small-24b-2507/endpoints. BORNE =
+  // pire endpoint du pool (mistral/eu : 0.11/0.33 par MTok, audio 0.00011). L'unité
+  // audio d'OpenRouter est la SECONDE pour ce modèle : appel mesuré le 2026-09-08,
+  // 8,15 s -> usage.cost 0.00081 (= 8,15 x 0.0001 sur l'endpoint mistral).
+  'mistralai/voxtral-small-24b-2507': { inputPerMTok: 0.11, outputPerMTok: 0.33, audioInputPerSecond: 0.00011 },
 
   // Z.ai (GLM) direct — vérifié le 2026-06-22 sur docs.z.ai/guides/overview/pricing.
   // (Les variantes gratuites glm-*-flash sont volontairement hors table : un « 0 »
@@ -125,7 +136,10 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
   'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
   'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25, tiered: true },
-  'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true },
+  // Audio : $0.50/MTok (ai.google.dev/gemini-api/docs/pricing) x 32 tokens par seconde
+  // (ai.google.dev/gemini-api/docs/tokens), vérifiés le 2026-09-08 = 0.000016 USD/s.
+  // Sans effet sur le devis tant que le flag thinking le refuse (Q-1).
+  'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true, audioInputPerSecond: 0.000016 },
   'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
   'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
   'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
@@ -142,7 +156,9 @@ function isValidPrice(v: unknown): v is ModelPrice {
   const p = v as Record<string, unknown>
   return (
     typeof p.inputPerMTok === 'number' && Number.isFinite(p.inputPerMTok) && p.inputPerMTok >= 0 &&
-    typeof p.outputPerMTok === 'number' && Number.isFinite(p.outputPerMTok) && p.outputPerMTok >= 0
+    typeof p.outputPerMTok === 'number' && Number.isFinite(p.outputPerMTok) && p.outputPerMTok >= 0 &&
+    (p.audioInputPerSecond === undefined ||
+      (typeof p.audioInputPerSecond === 'number' && Number.isFinite(p.audioInputPerSecond) && p.audioInputPerSecond >= 0))
   )
 }
 
@@ -169,6 +185,7 @@ export function buildPricing(defaults: Record<string, ModelPrice>, overrideJson?
           // Un override peut marquer un modèle tiered/thinking (refus de devis) sans release.
           ...(price.tiered ? { tiered: true } : {}),
           ...(price.thinking ? { thinking: true } : {}),
+          ...(price.audioInputPerSecond !== undefined ? { audioInputPerSecond: price.audioInputPerSecond } : {}),
         }
       } else {
         invalid.push(model)
