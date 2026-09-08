@@ -2,10 +2,10 @@
 // concrete model id + a human-readable reason. This is the seam where intelligence
 // lands later (v1 routing, v2 learning); v0 is a deterministic mapping.
 
-import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, DEFAULT_TIER, isTier } from './catalog.js'
+import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, audioCandidates, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
 import { resolveBareModel, resolveFamilyModel } from './model-alias.js'
-import { isVisionCapable } from './vision.js'
+import { isVisionCapable, isAudioCapable } from './vision.js'
 import { config } from './config.js'
 import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js'
 
@@ -19,7 +19,7 @@ import type { ChatRequest, RouteDecision, RouteStrategy, Tier } from './types.js
 export class RouteRefusal extends Error {
   readonly status = 400 as const
   constructor(
-    readonly code: 'model_unknown' | 'model_ambiguous' | 'objective_unavailable' | 'model_not_vision' | 'no_vision_model',
+    readonly code: 'model_unknown' | 'model_ambiguous' | 'objective_unavailable' | 'model_not_vision' | 'no_vision_model' | 'model_not_audio' | 'no_audio_model',
     message: string,
   ) {
     super(message)
@@ -27,17 +27,55 @@ export class RouteRefusal extends Error {
   }
 }
 
-/** Vrai si un message porte une IMAGE en entrée (content part `image_url`, format
- * OpenAI). C'est la modalité d'ENTRÉE — rien à voir avec `modalities` (la sortie). */
-export function hasImageInput(req: ChatRequest): boolean {
+/** Vrai si un message porte une content part du type donné (format OpenAI). */
+function hasInputPart(req: ChatRequest, type: string): boolean {
   for (const msg of req.messages ?? []) {
     const content = (msg as { content?: unknown })?.content
     if (!Array.isArray(content)) continue
     for (const part of content) {
-      if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'image_url') return true
+      if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === type) return true
     }
   }
   return false
+}
+
+/** Vrai si un message porte une IMAGE en entrée (content part `image_url`, format
+ * OpenAI). C'est la modalité d'ENTRÉE — rien à voir avec `modalities` (la sortie). */
+export function hasImageInput(req: ChatRequest): boolean {
+  return hasInputPart(req, 'image_url')
+}
+
+/** Vrai si un message porte de l'AUDIO en entrée (content part `input_audio`, format
+ * OpenAI : `{ type: 'input_audio', input_audio: { data: <base64>, format: 'wav'|'mp3' } }`).
+ * Le cas d'usage : un vocal à transcrire ou à comprendre. */
+export function hasAudioInput(req: ChatRequest): boolean {
+  return hasInputPart(req, 'input_audio')
+}
+
+/** Une modalité d'ENTRÉE que la requête exige du modèle : son référentiel de
+ * capacité (feed OpenRouter, null = inconnu = pas de filtrage), son slot de repli
+ * et ses codes de refus. Vision et audio suivent EXACTEMENT la même mécanique. */
+interface InputNeed {
+  readonly label: 'vision' | 'audio'
+  readonly noun: string
+  readonly capable: (model: string) => boolean | null
+  readonly slot: () => string[] | null
+  readonly notCapable: 'model_not_vision' | 'model_not_audio'
+  readonly noModel: 'no_vision_model' | 'no_audio_model'
+}
+const VISION_NEED: InputNeed = {
+  label: 'vision', noun: 'images', capable: isVisionCapable, slot: visionCandidates,
+  notCapable: 'model_not_vision', noModel: 'no_vision_model',
+}
+const AUDIO_NEED: InputNeed = {
+  label: 'audio', noun: 'audio', capable: isAudioCapable, slot: audioCandidates,
+  notCapable: 'model_not_audio', noModel: 'no_audio_model',
+}
+function inputNeeds(req: ChatRequest): InputNeed[] {
+  const needs: InputNeed[] = []
+  if (hasImageInput(req)) needs.push(VISION_NEED)
+  if (hasAudioInput(req)) needs.push(AUDIO_NEED)
+  return needs
 }
 
 // "auto", "auto:economy", "auto:quality" -> tier (if encoded in the alias).
@@ -164,30 +202,36 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   // (mode dégradé assumé : une panne du feed ne coupe jamais le trafic). Données
   // présentes = strict : jamais un modèle aveugle servi en silence (le bug mesuré en
   // prod : réponse vide facturée).
-  const needsVision = hasImageInput(req)
+  // Même mécanique pour l'AUDIO en entrée (chantier 2026-09-08, content part
+  // `input_audio`) : référentiel audio, slot `audio`, refus model_not_audio /
+  // no_audio_model. Une requête image + audio exige les deux capacités.
+  const needs = inputNeeds(req)
   const guardVisionPin = (model: string, what: string): void => {
-    if (needsVision && isVisionCapable(model) === false) {
-      throw new RouteRefusal(
-        'model_not_vision',
-        `request has image input but ${what} "${model}" does not accept images — pin a vision-capable model or use "auto"`,
-      )
+    for (const need of needs) {
+      if (need.capable(model) === false) {
+        throw new RouteRefusal(
+          need.notCapable,
+          `request has ${need.label === 'vision' ? 'image' : 'audio'} input but ${what} "${model}" does not accept ${need.noun} — pin a${need.label === 'audio' ? 'n' : ''} ${need.label}-capable model or use "auto"`,
+        )
+      }
     }
   }
 
   const allow = req.openmulti?.allow
   if (allow && allow.length > 0) {
-    // Contrainte dure + image : le premier membre VISION de l'allowlist (quand le
-    // référentiel existe) ; aucun -> refus explicite.
+    // Contrainte dure + image/audio : le premier membre CAPABLE de l'allowlist (quand
+    // le référentiel existe) ; aucun -> refus explicite.
     let chosen = allow[0]!
-    if (needsVision) {
-      const sighted = allow.find((m) => isVisionCapable(m) !== false)
-      if (sighted === undefined) {
+    if (needs.length > 0) {
+      const fit = allow.find((m) => needs.every((need) => need.capable(m) !== false))
+      if (fit === undefined) {
+        const need = needs.find((n) => !allow.some((m) => n.capable(m) !== false)) ?? needs[0]!
         throw new RouteRefusal(
-          'model_not_vision',
-          `request has image input but none of the allowed models (${allow.join(', ')}) accepts images`,
+          need.notCapable,
+          `request has ${need.label === 'vision' ? 'image' : 'audio'} input but none of the allowed models (${allow.join(', ')}) accepts ${need.noun}`,
         )
       }
-      chosen = sighted
+      chosen = fit
     }
     return { model: chosen, reason: `pinned to caller allowlist (${allow.length} allowed)`, candidates: [chosen] }
   }
@@ -259,25 +303,27 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   const manual = named?.candidates
   let candidates = manual ?? candidatesFor(tier, purpose)
 
-  // Filtre vision (référentiel présent seulement) : les candidats aveugles sont
-  // écartés ; plus AUCUN candidat -> repli EXPLICITE sur le slot `vision`, tracé dans
-  // reason ; slot vide -> refus clair. Le slot est de la curation d'exploitation
-  // (admin > fichier > env), on lui fait confiance sans re-filtrer.
-  let visionNote: string | null = null
-  if (needsVision) {
-    const sighted = candidates.filter((m) => isVisionCapable(m) !== false)
-    if (sighted.length !== candidates.length && sighted.length > 0) {
-      candidates = sighted
-      visionNote = 'vision-capable only'
-    } else if (sighted.length === 0) {
-      const slot = visionCandidates()
+  // Filtre par modalité d'entrée (référentiel présent seulement) : les candidats
+  // incapables sont écartés ; plus AUCUN candidat -> repli EXPLICITE sur le slot de la
+  // modalité (`vision` / `audio`), tracé dans reason ; slot vide -> refus clair. Le
+  // slot est de la curation d'exploitation (admin > fichier > env), on lui fait
+  // confiance sans re-filtrer sur SA modalité (les autres modalités exigées le
+  // filtrent encore : image + audio = les deux capacités).
+  const modalityNotes: string[] = []
+  for (const need of needs) {
+    const fit = candidates.filter((m) => need.capable(m) !== false)
+    if (fit.length !== candidates.length && fit.length > 0) {
+      candidates = fit
+      modalityNotes.push(`${need.label}-capable only`)
+    } else if (fit.length === 0) {
+      const slot = need.slot()
       if (slot && slot.length > 0) {
         candidates = slot
-        visionNote = 'vision fallback (slot vision)'
+        modalityNotes.push(`${need.label} fallback (slot ${need.label})`)
       } else {
         throw new RouteRefusal(
-          'no_vision_model',
-          `request has image input but no ${tier} candidate accepts images and the "vision" catalog slot is empty — set it (admin) or pin a vision-capable model`,
+          need.noModel,
+          `request has ${need.label === 'vision' ? 'image' : 'audio'} input but no ${tier} candidate accepts ${need.noun} and the "${need.label}" catalog slot is empty — set it (admin) or pin a${need.label === 'audio' ? 'n' : ''} ${need.label}-capable model`,
         )
       }
     }
@@ -292,7 +338,7 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
 
   // Une sélection manuelle ne route PAS par tier : la raison ne prétend pas un tier,
   // et le plafond de tokens par tier (OM-01) ne s'applique pas.
-  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, manual ? null : `${tier} tier`, visionNote, sel.note || null]
+  const reason = [named?.label ?? null, purpose ? `${purpose} task` : null, manual ? null : `${tier} tier`, ...modalityNotes, sel.note || null]
     .filter(Boolean)
     .join(', ')
 

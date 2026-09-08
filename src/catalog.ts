@@ -111,6 +111,22 @@ export function visionCandidates(): string[] | null {
 }
 
 /**
+ * Candidats du REPLI AUDIO — slot `audio` : quand une requête porte de l'AUDIO en
+ * ENTRÉE (content part `input_audio` : vocal à transcrire ou comprendre) et qu'AUCUN
+ * candidat du tier n'est audio-capable, le routeur retombe EXPLICITEMENT ici — même
+ * mécanique que `vision`, même précédence, AUCUN défaut intégré. Slot vide + aucun
+ * candidat audio = RouteRefusal('no_audio_model'), erreur claire.
+ */
+export function audioCandidates(): string[] | null {
+  return (
+    catalogOverride('audio') ??
+    catalogFileSlot('audio') ??
+    envList('OPENMULTI_MODELS_AUDIO') ??
+    (process.env.OPENMULTI_MODEL_AUDIO ? [process.env.OPENMULTI_MODEL_AUDIO] : null)
+  )
+}
+
+/**
  * Candidats de la génération d'image — slot `image`, même précédence que `fast` :
  * override admin (à chaud) > fichier catalogue > env pluriel > env singulier
  * (OPENMULTI_MODEL_IMAGE, le nom historique) > défaut neutre. Le PREMIER est servi

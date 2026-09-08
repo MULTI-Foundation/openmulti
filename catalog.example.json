@@ -1,5 +1,5 @@
 {
-  "_comment": "Exemple de format pour OPENMULTI_CATALOG_FILE (le vrai fichier, catalog.local.json, n'est pas versionné : la correspondance tier->modeles est de la configuration d'exploitation). Slots valides : economy|balanced|quality ou <purpose>_<tier>. Le premier modele de chaque slot est le primaire ; les suivants sont les candidats du bandit smart (8 max).",
+  "_comment": "Exemple de format pour OPENMULTI_CATALOG_FILE (le vrai fichier, catalog.local.json, n'est pas versionné : la correspondance tier->modeles est de la configuration d'exploitation). Slots valides : economy|balanced|quality ou <purpose>_<tier>, plus les slots hors tiers fast (objectif @fastest), image (generation d'image), vision (repli image en entree) et audio (repli audio en entree, content part input_audio). Le premier modele de chaque slot est le primaire ; les suivants sont les candidats du bandit smart (8 max).",
   "slots": {
     "economy": ["vendor/cheap-model", "vendor/other-candidate"],
     "balanced": ["vendor/main-model"],
