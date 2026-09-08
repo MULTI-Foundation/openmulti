@@ -118,7 +118,12 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   the capability → `model_not_vision` / `model_not_audio`. Image + audio requires both. No
   referential data at all (feed never loaded) = no filtering (documented degraded mode).
   Ops override: `OPENMULTI_VISION_MODELS` / `OPENMULTI_AUDIO_MODELS` (CSV) replace the feed.
-  Locked by `test/vision.test.ts` and `test/audio.test.ts`.
+  Locked by `test/vision.test.ts` and `test/audio.test.ts`. **Quotes** (`/v1/plan`, x402 402)
+  bound audio input in SECONDS: duration read from the container (`src/audio-duration.ts`:
+  wav/ogg/flac/mp3, anything else = `unsupported_content`) x `pricing.audioInputPerSecond`
+  (verified per model, absent = `pricing_unknown`); audio bytes are never counted as text
+  tokens. Images stay unquotable. Locked by `test/audio-duration.test.ts` and
+  `test/plan-audio.test.ts`.
 - **`src/select.ts`** — picks one candidate (the v1 "intelligence" seam). `default` returns the
   first candidate (= iso, the contract-locked behavior); `smart` is a deterministic **discounted
   bandit** (no RNG) over the metrics registry: observed stats decay per observation

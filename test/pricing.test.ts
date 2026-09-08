@@ -62,12 +62,15 @@ test('les modeles du catalogue d\'exploitation sont tarifes (regression smoke 20
   // (point cote OpenRouter, tiret cote API directe).
   // deepEqual STRICT : verrouille aussi les flags tiered/thinking (P0-1/Q-1) — en perdre
   // un ré-ouvrirait un devis « garanti » sous-estimant sur ces modèles.
-  const expected: Record<string, { inputPerMTok: number; outputPerMTok: number; tiered?: true; thinking?: true }> = {
+  const expected: Record<string, { inputPerMTok: number; outputPerMTok: number; tiered?: true; thinking?: true; audioInputPerSecond?: number }> = {
     'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
     'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
     'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
     'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25, tiered: true },
-    'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true },
+    // Prix audio (chantier x402 audio 2026-09-08) : 0.50 $/MTok x 32 tokens/s.
+    'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true, audioInputPerSecond: 0.000016 },
+    // Slot `audio` de prod : audio facturé à la seconde (pire endpoint OpenRouter).
+    'mistralai/voxtral-small-24b-2507': { inputPerMTok: 0.11, outputPerMTok: 0.33, audioInputPerSecond: 0.00011 },
     'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
     'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
     'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
