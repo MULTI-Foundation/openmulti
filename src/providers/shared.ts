@@ -24,11 +24,19 @@ export const ALLOWED_EMBEDDINGS_FIELDS = new Set([
   'model', 'input', 'dimensions', 'encoding_format', 'user',
 ])
 
+// POST /v1/images (endpoint images d'OpenRouter, verifie le 2026-10-19 via
+// /api/v1/images/models : les champs de supported_parameters + prompt/model).
+export const ALLOWED_IMAGES_FIELDS = new Set([
+  'model', 'prompt', 'input_references', 'aspect_ratio', 'resolution', 'size', 'n',
+  'seed', 'quality', 'background', 'output_format', 'output_compression', 'user',
+])
+
 // Soupape sans release : étendre l'allowlist par env (CSV), ex. un nouveau champ
 // OpenAI pas encore dans la liste.
 for (const f of (process.env.OPENMULTI_ALLOWED_EXTRA_FIELDS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
   ALLOWED_CHAT_FIELDS.add(f)
   ALLOWED_EMBEDDINGS_FIELDS.add(f)
+  ALLOWED_IMAGES_FIELDS.add(f)
 }
 
 const warnedFields = new Set<string>()
