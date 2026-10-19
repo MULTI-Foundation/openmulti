@@ -10,6 +10,7 @@ import { models } from './routes/models.js'
 import { plan } from './routes/plan.js'
 import { council } from './routes/council.js'
 import { embeddings } from './routes/embeddings.js'
+import { images } from './routes/images.js'
 import { admin } from './routes/admin.js'
 import { signup } from './routes/signup.js'
 import { account } from './routes/account.js'
@@ -53,6 +54,7 @@ app.route('/', account)
 app.route('/', plan)
 app.route('/', council)
 app.route('/', embeddings)
+app.route('/', images)
 
 // Routes d'admin (metering durable, bientôt cycle de vie des clés) : token ops strict.
 app.use('/admin/*', adminAuth)
