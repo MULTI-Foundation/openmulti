@@ -17,6 +17,7 @@
 // Le devis est en dollars FACTURÉS (marge du projet incluse — c'est ce que paiera le
 // client), arrondi au micro-dollar SUPÉRIEUR : une borne s'arrondit vers le haut.
 
+import { autoCacheApplies } from './auto-cache.js'
 import { computeCostUsd, priceFor } from './pricing.js'
 import { completionCount, effectiveOutputCap } from './output-bounds.js'
 import { audioDurationSeconds } from './audio-duration.js'
@@ -149,8 +150,16 @@ export function computeQuote(
   // `extraInputTokens` : tokens d'entrée à ajouter à la borne octets — utilisé par le
   // pliage du devis programme (E-5/program-quote) pour compter la valeur qui coule
   // (bornée en TOKENS par le cap de sortie amont, pas en octets).
-  const inputMax = Buffer.byteLength(JSON.stringify(audioSeconds > 0 ? textOnlyRequest(req) : req), 'utf8') + extraInputTokens
-  const textMax = computeCostUsd(model, inputMax, outputMax)
+  const inputJson = JSON.stringify(audioSeconds > 0 ? textOnlyRequest(req) : req)
+  const inputMax = Buffer.byteLength(inputJson, 'utf8') + extraInputTokens
+  // Prompt caching : un marqueur `cache_control` dans la requête peut faire facturer
+  // l'entrée au tarif d'ÉCRITURE de cache (Anthropic : 1.25x). La borne prend alors le
+  // pire cas « tout est écrit » (jamais « tout est relu », qui serait optimiste). Détection
+  // textuelle volontairement large : un faux positif ne fait que majorer la borne.
+  // L'auto-marquage opt-in (auto-cache.ts) pose le marqueur côté provider : même borne,
+  // sans que la requête le porte. Sans tarif d'écriture vérifié, le tarif input s'applique.
+  const cacheWrite = inputJson.includes('"cache_control"') || autoCacheApplies(req) ? inputMax : 0
+  const textMax = computeCostUsd(model, inputMax, outputMax, { write: cacheWrite })
   if (textMax === undefined) return { quote: null, unavailable: 'pricing_unknown' }
   // Audio en entrée : facturé à la seconde, borne = secondes lues x prix vérifié du
   // modèle ; modèle sans prix audio = pas de devis (jamais un faux zéro).

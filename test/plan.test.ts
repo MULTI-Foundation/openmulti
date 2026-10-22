@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 process.env.OPENROUTER_API_KEY ||= 'test-upstream-key'
 process.env.OPENMULTI_API_KEYS = 'sk_plan_test'
+process.env.OPENMULTI_ANTHROPIC_AUTO_CACHE = 'agent' // la borne doit suivre l'auto-marquage (test dedie)
 // balanced = modèle tarifé dans pricing.ts (0.95/4 par MTok) pour un devis calculable.
 process.env.OPENMULTI_MODEL_BALANCED = 'moonshotai/kimi-k2.6'
 process.env.OPENMULTI_MODEL_ECONOMY = 'deepseek/deepseek-chat'
@@ -270,4 +271,37 @@ test('devis: plafond de tier ecrete aussi max_completion_tokens', async () => {
   } finally {
     delete process.env.OPENMULTI_MAX_TOKENS_BALANCED
   }
+})
+
+test('prompt caching: cache_control dans la requete -> borne d\'entree au tarif d\'ECRITURE (jamais au tarif relu)', async () => {
+  // claude-sonnet-4-6 : input 3, ecriture 5m 3.75, hit 0.3 ($/MTok). La borne prend le pire
+  // cas « tout est ecrit » : 3.75. Le cas « tout est relu » (0.3) serait un devis optimiste.
+  const plain = { model: 'anthropic/claude-sonnet-4-6', messages: MSGS, max_tokens: 1000 }
+  const cached = {
+    model: 'anthropic/claude-sonnet-4-6',
+    messages: [{ role: 'system', content: [{ type: 'text', text: 'Preamble', cache_control: { type: 'ephemeral' } }] }, ...MSGS],
+    max_tokens: 1000,
+  }
+  const jPlain = await (await post(plain)).json()
+  const jCached = await (await post(cached)).json()
+  const inPlain = Buffer.byteLength(JSON.stringify(plain), 'utf8')
+  const inCached = Buffer.byteLength(JSON.stringify(cached), 'utf8')
+  assert.equal(jPlain.quote.max_cost_usd, Math.ceil((inPlain * 3 + 1000 * 15)) / 1_000_000)
+  assert.equal(jCached.quote.max_cost_usd, Math.ceil((inCached * 3.75 + 1000 * 15)) / 1_000_000)
+  // modele sans tarif d'ecriture verifie : la borne reste au tarif input (inchangee)
+  const ds = { model: 'deepseek/deepseek-chat', messages: cached.messages, max_tokens: 1000 }
+  const jDs = await (await post(ds)).json()
+  assert.equal(jDs.quote.max_cost_usd, Math.ceil((Buffer.byteLength(JSON.stringify(ds), 'utf8') * 0.14 + 1000 * 0.28)) / 1_000_000)
+})
+
+test('auto-cache opt-in: purpose agent -> borne d\'entree au tarif d\'ECRITURE sans marqueur dans la requete', async () => {
+  const agent = { model: 'anthropic/claude-sonnet-4-6', openmulti: { purpose: 'agent' }, messages: MSGS, max_tokens: 1000 }
+  const j = await (await post(agent)).json()
+  const inBytes = Buffer.byteLength(JSON.stringify(agent), 'utf8')
+  assert.equal(j.quote.max_cost_usd, Math.ceil((inBytes * 3.75 + 1000 * 15)) / 1_000_000)
+  // autre objectif : tarif input ; modele sans tarif d'ecriture (kimi) : inchange meme en agent
+  const gen = { ...agent, openmulti: { purpose: 'generation' } }
+  assert.equal((await (await post(gen)).json()).quote.max_cost_usd, Math.ceil((Buffer.byteLength(JSON.stringify(gen), 'utf8') * 3 + 1000 * 15)) / 1_000_000)
+  const kimi = { model: 'moonshotai/kimi-k2.6', openmulti: { purpose: 'agent' }, messages: MSGS, max_tokens: 1000 }
+  assert.equal((await (await post(kimi)).json()).quote.max_cost_usd, Math.ceil((Buffer.byteLength(JSON.stringify(kimi), 'utf8') * 0.95 + 1000 * 4)) / 1_000_000)
 })

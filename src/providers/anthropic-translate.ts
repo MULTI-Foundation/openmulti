@@ -45,7 +45,7 @@ function toContentBlocks(content: unknown): unknown {
     if (!part || typeof part !== 'object') continue
     const p = part as Dict
     if (p.type === 'text') {
-      blocks.push({ type: 'text', text: String(p.text ?? '') })
+      blocks.push(textBlock(p))
     } else if (p.type === 'image_url') {
       const url = String((p.image_url as Dict | undefined)?.url ?? '')
       const m = /^data:([^;]+);base64,(.*)$/.exec(url)
@@ -66,17 +66,44 @@ function safeJsonObject(s: unknown): Dict {
   }
 }
 
-/** Sépare les messages OpenAI en `system` (top-level Anthropic) + `messages` traduits. */
-export function splitMessages(msgs: unknown[]): { system: string; messages: Dict[] } {
-  const systemParts: string[] = []
+/** Bloc texte Anthropic depuis une part OpenAI `{type:'text'}`. Le marqueur de prompt
+ * caching `cache_control` (convention OpenRouter/Anthropic, hors schéma OpenAI) passe
+ * tel quel : c'est l'appelant qui décide de payer l'écriture (1.25x) pour les relectures
+ * (0.1x) — la traduction ne l'ajoute ni ne le retire. */
+function textBlock(p: Dict): Dict {
+  const block: Dict = { type: 'text', text: String(p.text ?? '') }
+  if (p.cache_control && typeof p.cache_control === 'object') block.cache_control = p.cache_control
+  return block
+}
+
+/** Blocs texte d'un message system : string -> un bloc ; parts -> un bloc par part texte
+ * (cache_control conservé). */
+function systemBlocks(content: unknown): Dict[] {
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : []
+  if (!Array.isArray(content)) return []
+  const out: Dict[] = []
+  for (const part of content) {
+    if (part && typeof part === 'object' && (part as Dict).type === 'text') {
+      const b = textBlock(part as Dict)
+      if (b.text) out.push(b)
+    }
+  }
+  return out
+}
+
+/** Sépare les messages OpenAI en `system` (top-level Anthropic) + `messages` traduits.
+ * `system` reste une string (concaténation, comportement historique) SAUF si une part
+ * porte `cache_control` : Anthropic n'accepte le marqueur que sur des blocs, le system
+ * devient alors un tableau de blocs texte. */
+export function splitMessages(msgs: unknown[]): { system: string | Dict[]; messages: Dict[] } {
+  const sysBlocks: Dict[] = []
   const out: Dict[] = []
   for (const raw of msgs) {
     if (!raw || typeof raw !== 'object') continue
     const m = raw as Dict
     const role = m.role
     if (role === 'system') {
-      const t = asText(m.content)
-      if (t) systemParts.push(t)
+      sysBlocks.push(...systemBlocks(m.content))
       continue
     }
     if (role === 'tool') {
@@ -102,7 +129,8 @@ export function splitMessages(msgs: unknown[]): { system: string; messages: Dict
     // user (défaut)
     out.push({ role: 'user', content: toContentBlocks(m.content) })
   }
-  return { system: systemParts.join('\n\n'), messages: out }
+  const cached = sysBlocks.some((b) => b.cache_control !== undefined)
+  return { system: cached ? sysBlocks : sysBlocks.map((b) => String(b.text)).join('\n\n'), messages: out }
 }
 
 function toAnthropicTool(t: unknown): Dict | undefined {
@@ -137,6 +165,46 @@ function toOutputConfig(rf: unknown): Dict | undefined {
 export interface ToAnthropicOpts {
   defaultMaxTokens: number
   maxTokensCeiling?: number
+  /** Auto-marquage `cache_control` (auto-cache.ts, opt-in par objectif) : deux points de
+   * cache au plus — la fin du préfixe stable (dernier bloc system, sinon dernier tool) et
+   * la fin de la conversation (dernier bloc texte du dernier message user), pour qu'un
+   * agent relise tout le tour précédent. Jamais si l'appelant a posé son propre marqueur. */
+  autoCache?: boolean
+}
+
+const EPHEMERAL = { type: 'ephemeral' }
+
+/** Pose les marqueurs d'auto-cache sur un corps Anthropic déjà construit (mutation). */
+export function applyAutoCache(body: Dict): void {
+  if (JSON.stringify(body).includes('"cache_control"')) return
+  // 1. Préfixe stable : tools -> system (Anthropic met en cache tout ce qui précède le
+  //    marqueur, tools compris quand il est sur le system).
+  if (typeof body.system === 'string' && body.system) body.system = [{ type: 'text', text: body.system }]
+  if (Array.isArray(body.system) && body.system.length) {
+    ;(body.system[body.system.length - 1] as Dict).cache_control = { ...EPHEMERAL }
+  } else if (Array.isArray(body.tools) && body.tools.length) {
+    ;(body.tools[body.tools.length - 1] as Dict).cache_control = { ...EPHEMERAL }
+  }
+  // 2. Fin de conversation : dernier bloc texte du dernier message user.
+  const msgs = Array.isArray(body.messages) ? (body.messages as Dict[]) : []
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]!
+    if (m.role !== 'user') continue
+    if (typeof m.content === 'string') {
+      if (m.content) m.content = [{ type: 'text', text: m.content, cache_control: { ...EPHEMERAL } }]
+      break
+    }
+    if (Array.isArray(m.content)) {
+      const blocks = m.content as Dict[]
+      for (let j = blocks.length - 1; j >= 0; j--) {
+        if (blocks[j]!.type === 'text') {
+          blocks[j]!.cache_control = { ...EPHEMERAL }
+          break
+        }
+      }
+    }
+    break
+  }
 }
 
 /** Requête OpenAI chat -> corps Anthropic Messages. */
@@ -144,7 +212,7 @@ export function toAnthropicBody(req: Dict, resolvedModel: string, opts: ToAnthro
   const id = anthropicModelId(resolvedModel)
   const { system, messages } = splitMessages(Array.isArray(req.messages) ? req.messages : [])
   const body: Dict = { model: id, messages }
-  if (system) body.system = system
+  if (Array.isArray(system) ? system.length : system) body.system = system
 
   // max_tokens est REQUIS côté Anthropic. Reprend celui de l'appelant, sinon défaut ;
   // borné par le plafond de tier (OM-01) s'il est posé.
@@ -176,6 +244,7 @@ export function toAnthropicBody(req: Dict, resolvedModel: string, opts: ToAnthro
   if (oc) body.output_config = oc
 
   if (req.stream === true) body.stream = true
+  if (opts.autoCache) applyAutoCache(body)
   return body
 }
 
@@ -186,13 +255,28 @@ export function mapStopReason(stop: unknown, hasToolCalls: boolean): string {
   return 'stop' // end_turn, stop_sequence, refusal, pause_turn
 }
 
-/** Tokens d'usage Anthropic -> {prompt,completion,total} OpenAI. L'input compte aussi le
- * cache (borne haute côté coût, comme les autres providers directs). */
-export function anthropicTokens(u: unknown): { prompt_tokens: number; completion_tokens: number; total_tokens: number } {
+/** Tokens d'usage Anthropic -> usage OpenAI. prompt_tokens = input + cache_read +
+ * cache_creation (le prompt TOTAL, comme chez OpenAI) ; la ventilation cache est
+ * exposée dans `prompt_tokens_details` (graphie OpenAI : cached_tokens /
+ * cache_write_tokens) pour que l'appelant voie si son cache prend — et pour que la
+ * synthèse de coût tarife les tokens cachés au tarif cache (pricing.ts). */
+export function anthropicTokens(u: unknown): {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_tokens_details: { cached_tokens: number; cache_write_tokens: number }
+} {
   const usage = (u && typeof u === 'object' ? (u as Dict) : {}) as Record<string, number | undefined>
-  const prompt = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+  const cached = usage.cache_read_input_tokens ?? 0
+  const written = usage.cache_creation_input_tokens ?? 0
+  const prompt = (usage.input_tokens ?? 0) + cached + written
   const completion = usage.output_tokens ?? 0
-  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
+    prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: written },
+  }
 }
 
 /** Réponse Anthropic Messages (non-stream) -> chat.completion OpenAI. `cost` (synthétisé

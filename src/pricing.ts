@@ -36,6 +36,16 @@ export interface ModelPrice {
    * facturation reste celle du provider (usage.cost). Borne = pire chemin/endpoint,
    * comme pour le texte. */
   audioInputPerSecond?: number
+  /** USD par million de tokens d'entrée servis DEPUIS LE CACHE du vendor (cache hit /
+   * cache read). Absent = remise non modélisée : les tokens cachés restent facturés au
+   * plein tarif input (borne haute, comportement historique). Vérifié page vendor,
+   * jamais déduit d'un multiplicateur supposé. */
+  cachedInputPerMTok?: number
+  /** USD par million de tokens d'ÉCRITURE de cache (Anthropic : 1.25x l'input pour le
+   * TTL 5 min par défaut). Absent = ces tokens comptent au tarif input — c'est l'écart
+   * historique (borne BASSE de 25 % sur ces seuls tokens), conservé tel quel pour les
+   * vendors dont le prix d'écriture n'est pas vérifié. */
+  cacheWriteInputPerMTok?: number
 }
 
 // Rempli provider par provider au câblage de son chemin direct, prix vérifiés à ce
@@ -46,19 +56,22 @@ export interface ModelPrice {
 // release via OPENMULTI_PRICING_JSON (l'override gagne, entrée par entrée), et un id
 // hors table = pas de cost (warning + métrique), jamais un faux zéro.
 const DEFAULTS: Record<string, ModelPrice> = {
-  // Moonshot direct — vérifié le 2026-06-10 sur platform.kimi.ai/docs/pricing/chat-k26.
-  // Input = cache MISS ($0.95/MTok) : le cache hit ($0.16) n'est pas modélisé, le coût
-  // synthétisé est donc une borne haute côté input.
-  'moonshotai/kimi-k2.6': { inputPerMTok: 0.95, outputPerMTok: 4 },
+  // Moonshot direct — vérifié le 2026-06-10 sur platform.kimi.ai/docs/pricing/chat-k26 :
+  // input cache MISS $0.95/MTok, cache HIT $0.16/MTok (usage.prompt_tokens_details.
+  // cached_tokens, cf docs/guide/context-caching vérifié le 2026-10-21). Les K2 n'ont
+  // pas de prix d'écriture distinct (seule la série K3 en a un).
+  'moonshotai/kimi-k2.6': { inputPerMTok: 0.95, outputPerMTok: 4, cachedInputPerMTok: 0.16 },
 
-  // OpenAI direct — vérifié le 2026-06-22 sur developers.openai.com/api/docs/pricing.
-  'openai/gpt-5.5': { inputPerMTok: 5, outputPerMTok: 30 },
-  'openai/gpt-5.4': { inputPerMTok: 2.5, outputPerMTok: 15 },
-  'openai/gpt-5.4-mini': { inputPerMTok: 0.75, outputPerMTok: 4.5 },
-  'openai/gpt-5.4-nano': { inputPerMTok: 0.2, outputPerMTok: 1.25 },
-  'openai/gpt-5': { inputPerMTok: 1.25, outputPerMTok: 10 },
-  'openai/gpt-4.1': { inputPerMTok: 2, outputPerMTok: 8 },
-  'openai/gpt-4o-mini': { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+  // OpenAI direct — vérifié le 2026-06-22 sur developers.openai.com/api/docs/pricing ;
+  // colonne « Cached input » (usage.prompt_tokens_details.cached_tokens) re-vérifiée le
+  // 2026-10-21 sur la même page. Pas de prix d'écriture sur ces modèles (< GPT-5.6).
+  'openai/gpt-5.5': { inputPerMTok: 5, outputPerMTok: 30, cachedInputPerMTok: 0.5 },
+  'openai/gpt-5.4': { inputPerMTok: 2.5, outputPerMTok: 15, cachedInputPerMTok: 0.25 },
+  'openai/gpt-5.4-mini': { inputPerMTok: 0.75, outputPerMTok: 4.5, cachedInputPerMTok: 0.075 },
+  'openai/gpt-5.4-nano': { inputPerMTok: 0.2, outputPerMTok: 1.25, cachedInputPerMTok: 0.02 },
+  'openai/gpt-5': { inputPerMTok: 1.25, outputPerMTok: 10, cachedInputPerMTok: 0.125 },
+  'openai/gpt-4.1': { inputPerMTok: 2, outputPerMTok: 8, cachedInputPerMTok: 0.5 },
+  'openai/gpt-4o-mini': { inputPerMTok: 0.15, outputPerMTok: 0.6, cachedInputPerMTok: 0.075 },
   // gpt-oss-120b (open-weight, multi-provider OpenRouter) — vérifié le 2026-07-21 sur
   // openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints. BORNE = pire provider
   // du pool (input 0.35 Cerebras, output 0.95 SambaNova) : notre steering
@@ -90,14 +103,16 @@ const DEFAULTS: Record<string, ModelPrice> = {
   // 8,15 s -> usage.cost 0.00081 (= 8,15 x 0.0001 sur l'endpoint mistral).
   'mistralai/voxtral-small-24b-2507': { inputPerMTok: 0.11, outputPerMTok: 0.33, audioInputPerSecond: 0.00011 },
 
-  // Z.ai (GLM) direct — vérifié le 2026-06-22 sur docs.z.ai/guides/overview/pricing.
+  // Z.ai (GLM) direct — vérifié le 2026-06-22 sur docs.z.ai/guides/overview/pricing ;
+  // tarifs « cached input » (lecture) re-vérifiés sur la même page le 2026-10-22 (le
+  // stockage du cache y est « limited-time free » : pas de prix d'écriture).
   // (Les variantes gratuites glm-*-flash sont volontairement hors table : un « 0 »
   // ferait croire au bandit à un chemin gratuit illimité.)
-  'z-ai/glm-4.6': { inputPerMTok: 0.6, outputPerMTok: 2.2 },
-  'z-ai/glm-4.5': { inputPerMTok: 0.6, outputPerMTok: 2.2 },
-  'z-ai/glm-4.5-air': { inputPerMTok: 0.2, outputPerMTok: 1.1 },
-  'z-ai/glm-4.5-x': { inputPerMTok: 2.2, outputPerMTok: 8.9 },
-  'z-ai/glm-4.5-airx': { inputPerMTok: 1.1, outputPerMTok: 4.5 },
+  'z-ai/glm-4.6': { inputPerMTok: 0.6, outputPerMTok: 2.2, cachedInputPerMTok: 0.11 },
+  'z-ai/glm-4.5': { inputPerMTok: 0.6, outputPerMTok: 2.2, cachedInputPerMTok: 0.11 },
+  'z-ai/glm-4.5-air': { inputPerMTok: 0.2, outputPerMTok: 1.1, cachedInputPerMTok: 0.03 },
+  'z-ai/glm-4.5-x': { inputPerMTok: 2.2, outputPerMTok: 8.9, cachedInputPerMTok: 0.45 },
+  'z-ai/glm-4.5-airx': { inputPerMTok: 1.1, outputPerMTok: 4.5, cachedInputPerMTok: 0.22 },
 
   // Qwen (Alibaba DashScope, international) — vérifié le 2026-06-23 sur
   // alibabacloud.com/help/en/model-studio/model-pricing. Plusieurs modèles sont tarifés
@@ -117,13 +132,17 @@ const DEFAULTS: Record<string, ModelPrice> = {
   'qwen/qwen3-235b-a22b': { inputPerMTok: 0.7, outputPerMTok: 2.8, tiered: true },
 
   // Anthropic direct — vérifié le 2026-06-23 via la référence officielle (claude-api).
-  // Input = plein tarif (le cache hit, ~0.1x, n'est pas modélisé → borne haute).
-  'anthropic/claude-fable-5': { inputPerMTok: 10, outputPerMTok: 50 },
-  'anthropic/claude-opus-4-8': { inputPerMTok: 5, outputPerMTok: 25 },
-  'anthropic/claude-opus-4-7': { inputPerMTok: 5, outputPerMTok: 25 },
-  'anthropic/claude-opus-4-6': { inputPerMTok: 5, outputPerMTok: 25 },
-  'anthropic/claude-sonnet-4-6': { inputPerMTok: 3, outputPerMTok: 15 },
-  'anthropic/claude-haiku-4-5': { inputPerMTok: 1, outputPerMTok: 5 },
+  // Cache : colonnes « Cache hits and refreshes » (usage.cache_read_input_tokens) et
+  // « 5m cache writes » (usage.cache_creation_input_tokens, TTL par défaut) vérifiées
+  // le 2026-10-21 sur platform.claude.com/docs/en/about-claude/pricing. L'écriture 1h
+  // (2x) n'est pas modélisée : la traduction ne pose jamais de ttl, l'appelant non plus
+  // (champ hors schéma OpenAI) — si ça change, ajouter le prix 1h AVANT.
+  'anthropic/claude-fable-5': { inputPerMTok: 10, outputPerMTok: 50, cachedInputPerMTok: 1, cacheWriteInputPerMTok: 12.5 },
+  'anthropic/claude-opus-4-8': { inputPerMTok: 5, outputPerMTok: 25, cachedInputPerMTok: 0.5, cacheWriteInputPerMTok: 6.25 },
+  'anthropic/claude-opus-4-7': { inputPerMTok: 5, outputPerMTok: 25, cachedInputPerMTok: 0.5, cacheWriteInputPerMTok: 6.25 },
+  'anthropic/claude-opus-4-6': { inputPerMTok: 5, outputPerMTok: 25, cachedInputPerMTok: 0.5, cacheWriteInputPerMTok: 6.25 },
+  'anthropic/claude-sonnet-4-6': { inputPerMTok: 3, outputPerMTok: 15, cachedInputPerMTok: 0.3, cacheWriteInputPerMTok: 3.75 },
+  'anthropic/claude-haiku-4-5': { inputPerMTok: 1, outputPerMTok: 5, cachedInputPerMTok: 0.1, cacheWriteInputPerMTok: 1.25 },
 
   // Trous découverts au smoke du 2026-07-02 : modèles du catalogue d'exploitation sans
   // entrée ici — sur un chemin DIRECT le coût n'est pas synthétisé et le bandit croit
@@ -132,17 +151,22 @@ const DEFAULTS: Record<string, ModelPrice> = {
   // vérifiées : opus 5/25, sonnet 3/15). Anthropic en DEUX graphies : OpenRouter
   // utilise le point (claude-sonnet-4.5), l'API Anthropic directe le tiret — le
   // catalogue d'exploitation a mélangé les deux, la table couvre les deux.
-  'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10 },
-  'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2 },
-  'z-ai/glm-5': { inputPerMTok: 0.6, outputPerMTok: 1.92 },
+  // Cached input OpenAI (0.125 / 0.025) : developers.openai.com/api/docs/pricing, 2026-10-21.
+  'openai/gpt-5.1': { inputPerMTok: 1.25, outputPerMTok: 10, cachedInputPerMTok: 0.125 },
+  'openai/gpt-5-mini': { inputPerMTok: 0.25, outputPerMTok: 2, cachedInputPerMTok: 0.025 },
+  // glm-5 : 1 / 3.2 (cached 0.2) vérifié le 2026-10-22 sur docs.z.ai/guides/overview/pricing
+  // — l'ancienne entrée 0.6/1.92 sous-estimait les devis de moitié (dérive signalée par
+  // pricing-drift.ts contre le feed OpenRouter, confirmée à la source).
+  'z-ai/glm-5': { inputPerMTok: 1, outputPerMTok: 3.2, cachedInputPerMTok: 0.2 },
   'qwen/qwen3-coder-plus': { inputPerMTok: 0.65, outputPerMTok: 3.25, tiered: true },
   // Audio : $0.50/MTok (ai.google.dev/gemini-api/docs/pricing) x 32 tokens par seconde
   // (ai.google.dev/gemini-api/docs/tokens), vérifiés le 2026-09-08 = 0.000016 USD/s.
   // Sans effet sur le devis tant que le flag thinking le refuse (Q-1).
   'google/gemini-3.1-flash-lite': { inputPerMTok: 0.25, outputPerMTok: 1.5, thinking: true, audioInputPerSecond: 0.000016 },
-  'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15 },
-  'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15 },
-  'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25 },
+  // Cache (hit / écriture 5m) : platform.claude.com/docs/en/about-claude/pricing, 2026-10-21.
+  'anthropic/claude-sonnet-4-5': { inputPerMTok: 3, outputPerMTok: 15, cachedInputPerMTok: 0.3, cacheWriteInputPerMTok: 3.75 },
+  'anthropic/claude-sonnet-4.5': { inputPerMTok: 3, outputPerMTok: 15, cachedInputPerMTok: 0.3, cacheWriteInputPerMTok: 3.75 },
+  'anthropic/claude-opus-4.8': { inputPerMTok: 5, outputPerMTok: 25, cachedInputPerMTok: 0.5, cacheWriteInputPerMTok: 6.25 },
 }
 
 export interface PricingParse {
@@ -157,9 +181,15 @@ function isValidPrice(v: unknown): v is ModelPrice {
   return (
     typeof p.inputPerMTok === 'number' && Number.isFinite(p.inputPerMTok) && p.inputPerMTok >= 0 &&
     typeof p.outputPerMTok === 'number' && Number.isFinite(p.outputPerMTok) && p.outputPerMTok >= 0 &&
-    (p.audioInputPerSecond === undefined ||
-      (typeof p.audioInputPerSecond === 'number' && Number.isFinite(p.audioInputPerSecond) && p.audioInputPerSecond >= 0))
+    optionalRate(p.audioInputPerSecond) &&
+    optionalRate(p.cachedInputPerMTok) &&
+    optionalRate(p.cacheWriteInputPerMTok)
   )
+}
+
+/** Tarif optionnel : absent, ou un nombre fini >= 0. */
+function optionalRate(v: unknown): boolean {
+  return v === undefined || (typeof v === 'number' && Number.isFinite(v) && v >= 0)
 }
 
 /** Construit le registre : defaults + override JSON (l'override gagne par modèle).
@@ -186,6 +216,9 @@ export function buildPricing(defaults: Record<string, ModelPrice>, overrideJson?
           ...(price.tiered ? { tiered: true } : {}),
           ...(price.thinking ? { thinking: true } : {}),
           ...(price.audioInputPerSecond !== undefined ? { audioInputPerSecond: price.audioInputPerSecond } : {}),
+          // Tarifs cache corrigeables sans release, comme le reste (vérifiés vendor par l'ops).
+          ...(price.cachedInputPerMTok !== undefined ? { cachedInputPerMTok: price.cachedInputPerMTok } : {}),
+          ...(price.cacheWriteInputPerMTok !== undefined ? { cacheWriteInputPerMTok: price.cacheWriteInputPerMTok } : {}),
         }
       } else {
         invalid.push(model)
@@ -217,14 +250,34 @@ export function pricedModelIds(): string[] {
   return Object.keys(registry.prices).sort()
 }
 
+/** Ventilation cache des tokens d'entrée, telle que le provider la rapporte. Les deux
+ * sont des SOUS-ENSEMBLES de promptTokens (OpenAI, DeepSeek, Moonshot, OpenRouter
+ * comptent le prompt total cache compris ; côté Anthropic, anthropicTokens additionne
+ * input + cache_read + cache_creation dans prompt pour la même raison). */
+export interface CacheTokens {
+  /** Tokens servis depuis le cache (cache hit / read). */
+  read?: number
+  /** Tokens écrits dans le cache (cache creation / write). */
+  write?: number
+}
+
 /** Coût USD synthétisé depuis les tokens — `undefined` si le modèle n'est pas tarifé
- * (jamais un faux zéro, cf en-tête). */
+ * (jamais un faux zéro, cf en-tête). Les tokens cachés sont facturés au tarif cache
+ * quand la table le PORTE (vérifié vendor), sinon au plein tarif input : la synthèse ne
+ * devient jamais optimiste par défaut. Les comptes cache sont écrêtés au prompt (un
+ * usage incohérent ne peut pas faire baisser le coût sous le plein tarif du reste). */
 export function computeCostUsd(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  cache: CacheTokens = {},
 ): number | undefined {
   const p = priceFor(model)
   if (!p) return undefined
-  return (promptTokens * p.inputPerMTok + completionTokens * p.outputPerMTok) / 1_000_000
+  const read = Math.min(Math.max(0, cache.read ?? 0), promptTokens)
+  const write = Math.min(Math.max(0, cache.write ?? 0), promptTokens - read)
+  const plain = promptTokens - read - write
+  const readRate = p.cachedInputPerMTok ?? p.inputPerMTok
+  const writeRate = p.cacheWriteInputPerMTok ?? p.inputPerMTok
+  return (plain * p.inputPerMTok + read * readRate + write * writeRate + completionTokens * p.outputPerMTok) / 1_000_000
 }

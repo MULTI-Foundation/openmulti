@@ -15,7 +15,7 @@ import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestR
 import { markPathUnservable } from '../path-quarantine.js'
 import { meterUsage } from '../meter.js'
 import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor, reserveSpend, isMetered } from '../keys.js'
-import { SseUsageScanner, sseLineTransform, mutateSseUsageLine } from '../sse.js'
+import { SseUsageScanner, sseLineTransform, mutateSseUsageLine, cachedPromptTokens } from '../sse.js'
 import { headerSafe } from '../sanitize.js'
 import { runCouncil } from '../council.js'
 import { computeCouncilQuote } from '../council-quote.js'
@@ -218,7 +218,7 @@ chat.post('/v1/chat/completions', async (c) => {
   // metering durable (facturation, Redis, fire-and-forget - cf meter.ts). `provider`
   // est mutable : l'helper capture toujours le chemin courant/final.
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
-    const rec: RequestRecord = { key, model: decision.model, provider: provider.name, ...r }
+    const rec: RequestRecord = { key, model: decision.model, provider: provider.name, candidates: decision.candidates, ...r }
     // P0-6 : != null, pas truthiness - un coût légitime de 0 doit produire billedUsd=0
     // (facturé/métré), pas être escamoté comme absent.
     if (rec.costUsd != null) rec.billedUsd = rec.costUsd * marginFactor
@@ -450,6 +450,7 @@ chat.post('/v1/chat/completions', async (c) => {
             settle({
               error: errored,
               promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+              cachedPromptTokens: cachedPromptTokens(scanner.usage),
               // le scanner lit le flux APRÈS la marge : on retrouve le coût brut
               costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
               durationMs: Date.now() - startedAt,
@@ -481,6 +482,7 @@ chat.post('/v1/chat/completions', async (c) => {
           })
           settle({
             promptTokens: scanner.usage?.prompt_tokens, completionTokens: scanner.usage?.completion_tokens,
+            cachedPromptTokens: cachedPromptTokens(scanner.usage),
             costUsd: scanner.usage?.cost !== undefined ? scanner.usage.cost / marginFactor : undefined,
             durationMs: Date.now() - startedAt,
           })
@@ -525,6 +527,7 @@ chat.post('/v1/chat/completions', async (c) => {
   })
   settle({
     promptTokens: u?.prompt_tokens, completionTokens: u?.completion_tokens,
+    cachedPromptTokens: cachedPromptTokens(u),
     costUsd: u?.cost, durationMs: Date.now() - startedAt,
   })
   // Only echo the routing decision when the caller opted into the extension.

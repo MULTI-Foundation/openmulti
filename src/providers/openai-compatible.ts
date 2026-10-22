@@ -14,8 +14,8 @@
 // et vit ici une seule fois. Moonshot (le premier chemin direct) est désormais une
 // instance de cette fabrique ; chaque nouveau vendor en ajoute une.
 
-import { computeCostUsd } from '../pricing.js'
-import { injectCostIntoSseData, sseLineTransform } from '../sse.js'
+import { computeCostUsd, type CacheTokens } from '../pricing.js'
+import { injectCostIntoSseData, sseLineTransform, cachedPromptTokens, cacheWritePromptTokens } from '../sse.js'
 import { log } from '../log.js'
 import { recordPricingMiss } from '../metrics.js'
 import { isRetryableStatus, pickAllowedFields } from './shared.js'
@@ -124,8 +124,8 @@ export function makeOpenAICompatibleProvider(spec: OpenAICompatibleSpec): OpenAI
 
   /** Coût synthétisé pour `model`, ou undefined + trace du trou de tarif (jamais un
    * faux zéro : le bandit lirait « gratuit » → biais dangereux). */
-  const costOrMiss = (model: string, promptTokens: number, completionTokens: number): number | undefined => {
-    const cost = computeCostUsd(model, promptTokens, completionTokens)
+  const costOrMiss = (model: string, promptTokens: number, completionTokens: number, cache: CacheTokens): number | undefined => {
+    const cost = computeCostUsd(model, promptTokens, completionTokens, cache)
     if (cost === undefined) {
       recordPricingMiss(model)
       log.warn('pricing_miss', { provider: spec.name, model })
@@ -136,13 +136,16 @@ export function makeOpenAICompatibleProvider(spec: OpenAICompatibleSpec): OpenAI
   const normalizeResponse = (data: Record<string, unknown>, model: string): Record<string, unknown> => {
     const u = data.usage as { prompt_tokens?: number; completion_tokens?: number; cost?: unknown } | undefined
     if (!u || typeof u !== 'object' || typeof u.cost === 'number') return data
-    const cost = costOrMiss(model, u.prompt_tokens ?? 0, u.completion_tokens ?? 0)
+    // Tokens cachés (cache hit) au tarif cache quand pricing.ts le porte — la remise
+    // réelle du vendor entre dans usage.cost, donc dans le signal du bandit.
+    const cache = { read: cachedPromptTokens(u), write: cacheWritePromptTokens(u) }
+    const cost = costOrMiss(model, u.prompt_tokens ?? 0, u.completion_tokens ?? 0, cache)
     if (cost === undefined) return data
     return { ...data, usage: { ...u, cost } }
   }
 
   const adaptStream = (upstream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> =>
-    sseLineTransform(upstream, (line) => injectCostIntoSseData(line, (pt, ct) => costOrMiss(model, pt, ct)))
+    sseLineTransform(upstream, (line) => injectCostIntoSseData(line, (pt, ct, cache) => costOrMiss(model, pt, ct, cache)))
 
   const provider: Provider = {
     name: spec.name,

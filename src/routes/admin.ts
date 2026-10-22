@@ -11,6 +11,8 @@ import { effectiveCouncil } from '../council.js'
 import { catalogFileSlots } from '../catalog-file.js'
 import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, audioCandidates, isTier } from '../catalog.js'
 import { pricedModelIds } from '../pricing.js'
+import { fetchBenchmarks } from '../openrouter-benchmarks.js'
+import { refreshPricingDrift, pricingDriftReport } from '../pricing-drift.js'
 import { route, RouteRefusal } from '../router.js'
 import { stageRequest } from '../program-quote.js'
 import { log } from '../log.js'
@@ -125,6 +127,30 @@ admin.get('/admin/catalog', (c) => {
 // EXACTEMENT comme une étape MULTI (stageRequest, règle §3.4) puis route(), sans
 // aucune dépense ni appel provider. Sert la console admin (« que sert @best en ce
 // moment ? ») ; RouteRefusal ressort en 400 structuré, comme sur toute surface.
+// GET /admin/benchmarks -> le snapshot OpenRouter (export public quotidien, CC BY 4.0) agrégé
+// par benchmark puis par modèle, badges Pareto / best value recalculés. `benchmarks: null`
+// = aucune donnée (feed jamais chargé) : la console n'affiche rien, ne refuse rien.
+admin.get('/admin/benchmarks', async (c) => {
+  const snap = await fetchBenchmarks()
+  if (!snap) return c.json({ snapshot_date: null, attribution: null, benchmarks: null })
+  return c.json({
+    snapshot_date: snap.snapshotDate,
+    retrieved_at: snap.retrievedAt,
+    attribution: snap.attribution,
+    benchmarks: snap.benchmarks.map((b) => ({ id: b.id, page_url: b.pageUrl, models: b.models })),
+  })
+})
+
+// GET /admin/pricing/drift -> modèles dont le prix de pricing.ts s'écarte du feed OpenRouter
+// de plus de la tolérance (défaut 10 %). `rows: null` = feed jamais lu. On signale, on ne
+// corrige pas (chaque prix de la table est vérifié à la main, règle du repo).
+admin.get('/admin/pricing/drift', async (c) => {
+  // Dernier rapport (rafraîchi toutes les heures au boot) ; calcul à la demande seulement
+  // tant qu'aucun feed n'a été lu.
+  const report = pricingDriftReport().rows ? pricingDriftReport() : await refreshPricingDrift()
+  return c.json({ tolerance_pct: Math.round(report.tolerance * 100), rows: report.rows })
+})
+
 admin.get('/admin/resolve', (c) => {
   const raw = (c.req.query('target') ?? '').trim()
   const word = (raw.startsWith('@') ? raw.slice(1) : raw).toLowerCase() // G12 : minuscules, comme le parseur

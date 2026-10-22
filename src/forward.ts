@@ -61,7 +61,7 @@ export async function forwardChatNonStream(req: ChatRequest, ctx: ForwardCtx): P
   let failedOver = false
 
   const record = (r: Omit<RequestRecord, 'key' | 'model' | 'provider'>) => {
-    const rec: RequestRecord = { key: ctx.key, model: decision.model, provider: provider.name, ...r }
+    const rec: RequestRecord = { key: ctx.key, model: decision.model, provider: provider.name, candidates: decision.candidates, ...r }
     if (rec.costUsd) rec.billedUsd = rec.costUsd * ctx.marginFactor
     recordRequest(rec)
     meterUsage(rec)

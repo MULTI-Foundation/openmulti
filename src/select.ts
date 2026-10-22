@@ -19,6 +19,7 @@
 // exploit forever — the pre-bandit behavior, locked by test/select.test.ts).
 
 import { modelAggregate, setBanditCollapsedRegime, DECAY_WINDOW, type ModelAggregate } from './metrics.js'
+import { banditNow } from './bandit.js'
 import { log } from './log.js'
 import type { RouteStrategy } from './types.js'
 
@@ -33,6 +34,17 @@ const MAX_ERROR_RATE = Math.min(1, Math.max(0, Number(process.env.OPENMULTI_SMAR
 // GLOBALE, metrics.ts, chaque requête à N'IMPORTE QUEL modèle fait retomber le bras sous
 // MIN_SAMPLES), d'où l'alerte HighErrorRate sans aucun provider malade.
 const RECOVERY_PROBE_FLOOR = Math.max(0.5, MIN_SAMPLES / 10)
+
+// Sonde de guérison TEMPORELLE (R-1, faible trafic) : un bras malsain dont la dernière
+// erreur date de plus de ce délai est re-sondé — UNE requête, quel que soit son décompte.
+// Sans elle, à trafic faible, retomber sous RECOVERY_PROBE_FLOOR par décote demande
+// ~WINDOW·ln(MIN_SAMPLES/plancher) observations (≈ 600 à WINDOW=200) : une panne de dix
+// minutes excluait un provider pendant des semaines. Si la sonde échoue, l'horodatage
+// repart (une requête par délai) ; si elle réussit, le bras reste dû et enchaîne jusqu'à
+// redevenir sain (ses succès diluent le taux d'erreur amorti). 0 = désactivée.
+const RECOVERY_PROBE_MS = Math.max(0, Number(process.env.OPENMULTI_SMART_RECOVERY_PROBE_S ?? 600)) * 1000
+// Même horloge que les horodatages d'erreur (bandit.ts) ; ré-exportée pour les tests.
+export { _setBanditClockForTests } from './bandit.js'
 
 // P0-9 : régime effondré. Avec amortissement actif (window>0), le décompte amorti d'un
 // bras sature à ~window ; si le plancher d'exploration MIN_SAMPLES atteint ou dépasse
@@ -83,6 +95,22 @@ export function selectModel(
   }
 
   const agg = candidates.map((m) => ({ m, ...aggregate(m) }))
+
+  // 0. Sonde de guérison temporelle : un bras malsain silencieux depuis RECOVERY_PROBE_MS
+  // reçoit UNE requête (le plus anciennement en erreur d'abord). Avant l'exploration :
+  // en régime établi un perdant sain est presque toujours sous-échantillonné, la
+  // sonde ne serait sinon jamais atteinte.
+  if (RECOVERY_PROBE_MS > 0) {
+    const t = banditNow()
+    let due: (typeof agg)[number] | null = null
+    for (const a of agg) {
+      if (isHealthy(a) || a.lastErrorAt == null || t - a.lastErrorAt < RECOVERY_PROBE_MS) continue
+      if (!due || a.lastErrorAt < due.lastErrorAt!) due = a
+    }
+    if (due) {
+      return { model: due.m, note: `smart: recovery probe (last error ${Math.round((t - due.lastErrorAt!) / 1000)}s ago)` }
+    }
+  }
 
   // 1. Explore: any candidate short on data gets the request (least-sampled first).
   // P0-10 : le gate de santé s'applique AUSSI ici. Un bras jugé malsain (assez de

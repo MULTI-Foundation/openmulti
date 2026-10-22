@@ -217,3 +217,67 @@ test('adaptStream: un event usage coupe entre deux chunks est quand meme enrichi
   )
   assert.equal(JSON.parse(text.split('\n')[0]!.slice(6)).usage.cost, 2.95)
 })
+
+// ── Prompt caching (tokens cachés au tarif cache hit Moonshot, 0.16 $/MTok) ────────
+
+test('normalizeResponse: prompt_tokens_details.cached_tokens -> tokens caches a 0.16, le reste a 0.95', () => {
+  const out = normalizeMoonshotResponse(
+    { usage: { prompt_tokens: 1_000_000, completion_tokens: 500_000, prompt_tokens_details: { cached_tokens: 500_000 } } },
+    'moonshotai/kimi-k2.6',
+  )
+  // 0.5M * 0.95 + 0.5M * 0.16 + 0.5M * 4 = 0.475 + 0.08 + 2 = 2.555 (vs 2.95 sans cache)
+  assert.equal((out.usage as any).cost, 2.555)
+  // la ventilation reste visible pour l'appelant (champ OpenAI standard, intact)
+  assert.deepEqual((out.usage as any).prompt_tokens_details, { cached_tokens: 500_000 })
+})
+
+test('e2e non-stream: les tokens caches baissent usage.cost ET alimentent kind="prompt_cached"', async () => {
+  mockResponse = () =>
+    new Response(
+      JSON.stringify({
+        id: 'cmpl-1',
+        model: 'kimi-k2.6',
+        choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 500_000, total_tokens: 1_500_000, prompt_tokens_details: { cached_tokens: 500_000 } },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )
+  const res = await post({ model: 'moonshotai/kimi-k2.6', messages: [{ role: 'user', content: 'hi' }] })
+  const j = await res.json()
+  assert.equal(res.status, 200)
+  assert.equal(j.usage.cost, 2.555)
+  const prom = renderProm()
+  assert.match(prom, /openmulti_tokens_total\{key="moonshot",model="moonshotai\/kimi-k2.6",provider="moonshot",kind="prompt"\} 1000000\b/)
+  assert.match(prom, /openmulti_tokens_total\{key="moonshot",model="moonshotai\/kimi-k2.6",provider="moonshot",kind="prompt_cached"\} 500000\b/)
+  // le bandit voit le cout REEL (remise cache comprise), pas la borne haute
+  assert.match(prom, /openmulti_cost_usd_total\{key="moonshot",model="moonshotai\/kimi-k2.6",provider="moonshot"\} 2.555\b/)
+})
+
+test('e2e stream: tokens caches dans le chunk usage -> cost synthetise au tarif cache', async () => {
+  const sse = [
+    'data: {"id":"cmpl-1","choices":[{"delta":{"content":"Hel"}}]}',
+    '',
+    'data: {"id":"cmpl-1","choices":[],"usage":{"prompt_tokens":1000000,"completion_tokens":500000,"prompt_tokens_details":{"cached_tokens":500000}}}',
+    '',
+    'data: [DONE]',
+    '',
+    '',
+  ].join('\n')
+  mockResponse = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sse))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )
+  const res = await post({ model: 'moonshotai/kimi-k2.6', stream: true, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  const text = await res.text()
+  const usageLine = text.split('\n').find((l) => l.includes('"usage"'))
+  assert.ok(usageLine, 'chunk usage absent du flux relaye')
+  assert.equal(JSON.parse(usageLine.slice(6)).usage.cost, 2.555)
+  assert.match(renderProm(), /kind="prompt_cached"\} 500000\b/)
+})
