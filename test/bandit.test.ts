@@ -14,11 +14,12 @@ process.env.OPENMULTI_SMART_MIN_SAMPLES = '2'
 process.env.OPENMULTI_SMART_MAX_ERROR_RATE = '0.2'
 process.env.OPENMULTI_SMART_DECAY_WINDOW = '20'
 
-const { selectModel } = await import('../src/select.ts')
+const { selectModel, _setBanditClockForTests } = await import('../src/select.ts')
 const { recordRequest, modelAggregate, renderProm, _resetMetrics, _setKnownModelsForTest } = await import('../src/metrics.ts')
 
 beforeEach(() => {
   _resetMetrics()
+  _setBanditClockForTests(null)
   // Les ids synthétiques doivent être "connus" sinon le bornage de cardinalité les
   // collapse sur 'other' (cf metrics-cardinality.test.ts).
   _setKnownModelsForTest(['a/1', 'b/2'])
@@ -119,4 +120,90 @@ test('récence: un historique pas cher ne masque pas un coût récent élevé', 
   for (let i = 0; i < 3; i++) recordRequest({ key: 'k', model: 'b/2', costUsd: 0.05 })
   const s = selectModel(['a/1', 'b/2'], 'smart')
   assert.equal(s.model, 'b/2')
+})
+
+// ── Sonde de guérison temporelle (R-1, faible trafic) ────────────────────────────
+// Défaut OPENMULTI_SMART_RECOVERY_PROBE_S=600 : un bras malsain silencieux depuis 10 min
+// reçoit une requête, quel que soit son décompte amorti.
+
+type Agg = { requests: number; errors: number; costUsd: number; lastErrorAt?: number }
+
+test('sonde temporelle : un bras malsain au-dessus du plancher est re-sondé après le délai', () => {
+  const agg: Record<string, Agg> = {
+    'a/1': { requests: 50, errors: 0, costUsd: 0.5 },
+    'b/2': { requests: 8, errors: 8, costUsd: 0, lastErrorAt: 1_000_000 }, // mort, bien au-dessus du plancher
+  }
+  _setBanditClockForTests(() => 1_000_000 + 599_000)
+  assert.equal(selectModel(['a/1', 'b/2'], 'smart', (m) => agg[m]!).model, 'a/1', 'avant le délai : pas de sonde')
+  _setBanditClockForTests(() => 1_000_000 + 600_000)
+  const s = selectModel(['a/1', 'b/2'], 'smart', (m) => agg[m]!)
+  assert.equal(s.model, 'b/2')
+  assert.match(s.note, /recovery probe/)
+})
+
+test('sonde temporelle : sans horodatage (bras jamais en erreur, ou état legacy) rien ne change', () => {
+  const agg: Record<string, Agg> = {
+    'a/1': { requests: 50, errors: 0, costUsd: 0.5 },
+    'b/2': { requests: 8, errors: 8, costUsd: 0 },
+  }
+  _setBanditClockForTests(() => 10 ** 12)
+  assert.equal(selectModel(['a/1', 'b/2'], 'smart', (m) => agg[m]!).model, 'a/1')
+})
+
+test('sonde temporelle : prioritaire sur l\'exploration d\'un perdant sain sous-échantillonné', () => {
+  // En régime établi un perdant sain est presque toujours sous MIN_SAMPLES : sans
+  // priorité, la sonde (branche de repli) ne serait jamais atteinte.
+  const agg: Record<string, Agg> = {
+    'a/1': { requests: 50, errors: 0, costUsd: 0.5 },
+    'b/2': { requests: 1.5, errors: 0, costUsd: 0.05 }, // sain, sous-échantillonné (MIN=2)
+    'c/3': { requests: 6, errors: 6, costUsd: 0, lastErrorAt: 0 },
+  }
+  _setBanditClockForTests(() => 600_000)
+  assert.equal(selectModel(['a/1', 'b/2', 'c/3'], 'smart', (m) => agg[m]!).model, 'c/3')
+})
+
+test('boucle fermée à faible trafic : panne de 10 min, guérison en quelques sondes, pas en semaines', () => {
+  // 2 requêtes/heure. b/2 (moins cher) tombe en panne pendant 10 minutes puis guérit.
+  // Par décote seule, revenir sous le plancher (0.5 depuis ~2) demanderait ~28 obs = 14 h ;
+  // ici la sonde temporelle le remet en course en ~1 h après la guérison.
+  let t = 0
+  _setBanditClockForTests(() => t)
+  const picks: Array<[number, string]> = []
+  for (let i = 0; i < 60; i++) {
+    t = i * 30 * 60_000 // une requête toutes les 30 min
+    const bDown = t >= 2 * 3_600_000 && t < 2 * 3_600_000 + 10 * 60_000 // panne 2h00 -> 2h10 (1 requête)
+    const s = selectModel(['a/1', 'b/2'], 'smart')
+    picks.push([t, s.model])
+    recordRequest({ key: 'k', model: s.model, costUsd: s.model === 'a/1' ? 0.1 : 0.01, error: s.model === 'b/2' && bDown })
+  }
+  const failedAt = picks.find(([, m], i) => m === 'b/2' && i > 0 && picks[i]![0] >= 2 * 3_600_000)
+  assert.ok(failedAt, 'b/2 a bien été servi pendant la panne')
+  // Première requête servie à b/2 après la panne : au plus 1 h après (sonde due à +10 min,
+  // prochaine requête au plus 30 min plus tard).
+  const firstBack = picks.find(([tt, m]) => m === 'b/2' && tt > 2 * 3_600_000 + 10 * 60_000)
+  assert.ok(firstBack && firstBack[0] - (2 * 3_600_000 + 10 * 60_000) <= 3_600_000, `retour de b/2 à t=${firstBack?.[0]}`)
+  // Et en fin de série, b/2 (moins cher, guéri) est redevenu l'élu majoritaire.
+  const tail = picks.slice(45).filter(([, m]) => m === 'b/2').length
+  assert.ok(tail > 10, `b/2 doit redevenir l'élu après guérison (${tail}/15)`)
+})
+
+test('sonde temporelle : une sonde qui ÉCHOUE repousse la suivante d\'un délai complet', () => {
+  let t = 0
+  _setBanditClockForTests(() => t)
+  _setKnownModelsForTest(['a/1', 'b/2'])
+  // b/2 mort : 5 erreurs, puis a/1 bien échantillonné. Les observations de a/1 sont
+  // à portée {a/1} (R-2) : b/2 ne s'amortit pas, donc la sonde par plancher de décompte
+  // ne joue pas — seule la sonde temporelle gouverne.
+  for (let i = 0; i < 5; i++) { t += 1000; recordRequest({ key: 'k', model: 'b/2', error: true, costUsd: 0, candidates: ['b/2'] }) }
+  for (let i = 0; i < 20; i++) { t += 1000; recordRequest({ key: 'k', model: 'a/1', costUsd: 0.01, candidates: ['a/1'] }) }
+  const probesAt: number[] = []
+  for (let i = 0; i < 200; i++) {
+    t += 60_000 // une requête par minute pendant 200 min
+    const s = selectModel(['a/1', 'b/2'], 'smart')
+    if (s.model === 'b/2') probesAt.push(t)
+    recordRequest({ key: 'k', model: s.model, costUsd: 0.01, error: s.model === 'b/2', candidates: [s.model] })
+  }
+  // Délai 600 s, 200 min de trafic : 20 sondes (une par délai), jamais deux à moins de 600 s.
+  assert.ok(probesAt.length >= 19 && probesAt.length <= 20, `un bras mort coûte UNE requête par délai (vu ${probesAt.length} sur 200 min)`)
+  for (let i = 1; i < probesAt.length; i++) assert.ok(probesAt[i]! - probesAt[i - 1]! >= 600_000, 'deux sondes à moins d\'un délai')
 })

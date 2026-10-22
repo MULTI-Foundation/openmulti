@@ -8,12 +8,48 @@ export interface SseUsage {
   prompt_tokens: number
   completion_tokens: number
   cost?: number
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number }
+  prompt_cache_hit_tokens?: number
 }
 
 export interface SseUsageBlock {
   prompt_tokens?: number
   completion_tokens?: number
   cost?: unknown
+  prompt_tokens_details?: unknown
+  prompt_cache_hit_tokens?: unknown
+}
+
+function nonNegative(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+}
+
+/**
+ * Tokens d'entrée servis DEPUIS LE CACHE du provider, lus dans un bloc usage OpenAI-shape.
+ * Deux graphies coexistent : `prompt_tokens_details.cached_tokens` (OpenAI — référence
+ * chat completion object ; Moonshot — docs/guide/context-caching ; OpenRouter) et
+ * `prompt_cache_hit_tokens` (DeepSeek — guides/kv_cache). Vérifiées le 2026-10-21. La
+ * première gagne quand les deux sont présentes ; absent/invalide = 0 (plein tarif, borne
+ * haute). Pure : sert la synthèse de coût (providers directs) ET les métriques.
+ */
+export function cachedPromptTokens(usage: unknown): number {
+  if (!usage || typeof usage !== 'object') return 0
+  const u = usage as SseUsageBlock
+  const details = u.prompt_tokens_details
+  if (details && typeof details === 'object') {
+    const cached = (details as { cached_tokens?: unknown }).cached_tokens
+    if (typeof cached === 'number') return nonNegative(cached)
+  }
+  return nonNegative(u.prompt_cache_hit_tokens)
+}
+
+/** Tokens d'entrée ÉCRITS dans le cache (`prompt_tokens_details.cache_write_tokens`,
+ * Moonshot/OpenAI). Absent = 0. */
+export function cacheWritePromptTokens(usage: unknown): number {
+  if (!usage || typeof usage !== 'object') return 0
+  const details = (usage as SseUsageBlock).prompt_tokens_details
+  if (!details || typeof details !== 'object') return 0
+  return nonNegative((details as { cache_write_tokens?: unknown }).cache_write_tokens)
 }
 
 /**
@@ -46,11 +82,14 @@ export function mutateSseUsageLine(
  */
 export function injectCostIntoSseData(
   line: string,
-  computeCost: (promptTokens: number, completionTokens: number) => number | undefined,
+  computeCost: (promptTokens: number, completionTokens: number, cache: { read: number; write: number }) => number | undefined,
 ): string | null {
   return mutateSseUsageLine(line, (usage) => {
     if (typeof usage.cost === 'number') return false
-    const cost = computeCost(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0)
+    const cost = computeCost(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, {
+      read: cachedPromptTokens(usage),
+      write: cacheWritePromptTokens(usage),
+    })
     if (cost === undefined) return false // modèle non tarifé : ne rien inventer (cf pricing.ts)
     usage.cost = cost
     return true

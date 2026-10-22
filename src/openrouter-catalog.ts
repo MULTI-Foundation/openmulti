@@ -11,6 +11,38 @@ import { log } from './log.js'
 interface RawModel {
   id?: unknown
   architecture?: { input_modalities?: unknown; output_modalities?: unknown; modality?: unknown }
+  pricing?: { prompt?: unknown; completion?: unknown; input_cache_read?: unknown }
+}
+
+/** Prix OpenRouter d'un modèle, en USD par million de tokens (le feed les donne par token). */
+export interface FeedPrice {
+  inputPerMTok: number
+  outputPerMTok: number
+  cachedInputPerMTok?: number
+}
+
+const perMTok = (v: unknown): number | null => {
+  const n = typeof v === 'string' || typeof v === 'number' ? Number(v) : NaN
+  return Number.isFinite(n) && n >= 0 ? n * 1_000_000 : null
+}
+
+/** Prix par modèle, dérivés du même feed — la référence de la détection de DÉRIVE de
+ * pricing.ts (une table maintenue à la main dérive, leçon E-7). Strict : prompt ET
+ * completion numériques, sinon le modèle est absent (jamais un prix deviné). */
+export function parseModelPricing(body: unknown): Record<string, FeedPrice> {
+  const out: Record<string, FeedPrice> = {}
+  if (typeof body !== 'object' || body === null) return out
+  const data = (body as { data?: unknown }).data
+  if (!Array.isArray(data)) return out
+  for (const m of data as RawModel[]) {
+    if (typeof m?.id !== 'string' || m.id === '') continue
+    const input = perMTok(m.pricing?.prompt)
+    const output = perMTok(m.pricing?.completion)
+    if (input == null || output == null) continue
+    const cached = perMTok(m.pricing?.input_cache_read)
+    out[m.id] = cached != null ? { inputPerMTok: input, outputPerMTok: output, cachedInputPerMTok: cached } : { inputPerMTok: input, outputPerMTok: output }
+  }
+  return out
 }
 
 /** Extrait les ids de modèles servables, triés. Ne garde que les modèles qui PRODUISENT
@@ -83,7 +115,9 @@ interface CatalogLists {
   ids: string[]
   visionIds: string[]
   audioIds: string[]
+  pricing: Record<string, FeedPrice>
 }
+const EMPTY: CatalogLists = { ids: [], visionIds: [], audioIds: [], pricing: {} }
 let cache: (CatalogLists & { at: number }) | null = null
 let inflight: Promise<CatalogLists> | null = null
 
@@ -100,15 +134,15 @@ async function fetchCatalogLists(now: number): Promise<CatalogLists> {
       })
       if (!res.ok) {
         log.warn('openrouter_catalog_not_ok', { status: res.status })
-        return cache ?? { ids: [], visionIds: [], audioIds: [] }
+        return cache ?? EMPTY
       }
       const body = (await res.json()) as unknown
-      const lists = { ids: parseModelIds(body), visionIds: parseVisionModelIds(body), audioIds: parseAudioModelIds(body) }
+      const lists = { ids: parseModelIds(body), visionIds: parseVisionModelIds(body), audioIds: parseAudioModelIds(body), pricing: parseModelPricing(body) }
       if (lists.ids.length > 0) cache = { ...lists, at: now }
-      return lists.ids.length > 0 ? lists : (cache ?? { ids: [], visionIds: [], audioIds: [] })
+      return lists.ids.length > 0 ? lists : (cache ?? EMPTY)
     } catch (e) {
       log.warn('openrouter_catalog_error', { error: e instanceof Error ? e.message : String(e) })
-      return cache ?? { ids: [], visionIds: [], audioIds: [] }
+      return cache ?? EMPTY
     } finally {
       inflight = null
     }
@@ -129,4 +163,15 @@ export async function fetchVisionModelIds(now: number = Date.now()): Promise<str
 /** Ids audio (audio en entrée), même cache/fetch que fetchModelIds. */
 export async function fetchAudioModelIds(now: number = Date.now()): Promise<string[]> {
   return (await fetchCatalogLists(now)).audioIds
+}
+
+/** Prix OpenRouter par modèle (USD/MTok), même cache/fetch que fetchModelIds. */
+export async function fetchModelPricing(now: number = Date.now()): Promise<Record<string, FeedPrice>> {
+  return (await fetchCatalogLists(now)).pricing
+}
+
+/** Test helper : vide le cache du feed (isolation entre tests d'un même process). */
+export function _resetCatalogCacheForTests(): void {
+  cache = null
+  inflight = null
 }

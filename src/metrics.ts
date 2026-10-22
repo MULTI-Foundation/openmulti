@@ -10,6 +10,11 @@
 import { createHash } from 'node:crypto'
 import { catalogModels, fastCandidates, imageCandidates, visionCandidates, audioCandidates, EMBEDDING_MODEL } from './catalog.js'
 import { pricedModelIds } from './pricing.js'
+import { _resetBandit, observe as banditObserve, modelAggregate as banditModelAggregate, pathAggregate as banditPathAggregate, banditPushDrops, type ModelAggregate } from './bandit.js'
+
+// R-1 : la vue bandit vit dans bandit.ts (état partagé entre pods) ; ré-exportée ici
+// pour les consommateurs historiques (select.ts, tests).
+export { DECAY_WINDOW, type ModelAggregate } from './bandit.js'
 
 interface Stat {
   requests: number
@@ -17,6 +22,8 @@ interface Stat {
   retries: number
   promptTokens: number
   completionTokens: number
+  /** Sous-ensemble de promptTokens servi depuis le cache du provider (cache hit). */
+  cachedPromptTokens: number
   costUsd: number
   billedUsd: number
   durationMsSum: number
@@ -72,7 +79,7 @@ function bucket(key: string, model: string, provider: string): Stat {
   const id = `${key}${SEP}${labelModel(model)}${SEP}${provider}`
   let s = stats.get(id)
   if (!s) {
-    s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, costUsd: 0, billedUsd: 0, durationMsSum: 0, durationCount: 0 }
+    s = { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0, costUsd: 0, billedUsd: 0, durationMsSum: 0, durationCount: 0 }
     stats.set(id, s)
   }
   return s
@@ -101,11 +108,17 @@ export interface RequestRecord {
   provider?: string
   promptTokens?: number
   completionTokens?: number
+  /** Tokens de prompt servis depuis le cache du provider (cf sse.ts cachedPromptTokens).
+   * Signal d'exploitation : « le cache prend-il ? » par projet x modèle x chemin. */
+  cachedPromptTokens?: number
   costUsd?: number
   /** Montant facturé au projet : costUsd x (1 + marge/100). Egal a costUsd sans marge. */
   billedUsd?: number
   durationMs?: number
   error?: boolean
+  /** Modèles comparés par la décision de routage (RouteDecision.candidates) : borne la
+   * portée de la décote du bandit (R-2). Absent = décote globale. */
+  candidates?: string[]
 }
 
 /** A transient upstream failure was retried (same model, same access path). */
@@ -169,57 +182,34 @@ export function recordPathQuarantine(model: string, provider: string): void {
   pathQuarantines.set(id, (pathQuarantines.get(id) ?? 0) + 1)
 }
 
-export interface ModelAggregate {
-  requests: number
-  errors: number
-  costUsd: number
-}
-
-// --- Vue « bandit » (stats amorties), nourrit la stratégie 'smart' de select.ts ---
-//
-// Séparée des compteurs Prometheus ci-dessus, qui doivent rester MONOTONES : ici,
-// à chaque observation, TOUTES les entrées sont multipliées par RHO avant d'ajouter
-// la nouvelle (discounted bandit). Effets :
-//   - le récent pèse plus que l'ancien (un modèle dégradé/réparé est vu vite) ;
-//   - le décompte amorti d'un modèle délaissé glisse vers 0, ce qui re-déclenche
-//     l'exploration côté select.ts (refresh continu, ~MIN_SAMPLES/WINDOW du trafic).
-// OPENMULTI_SMART_DECAY_WINDOW est l'horizon effectif en nombre de requêtes
-// (RHO = 1 - 1/window) ; 0 = pas d'amortissement (stats à vie, comportement legacy).
-export const DECAY_WINDOW = Math.max(0, Number(process.env.OPENMULTI_SMART_DECAY_WINDOW ?? 200))
-const RHO = DECAY_WINDOW > 0 ? 1 - 1 / DECAY_WINDOW : 1
+// --- Vue « bandit » (stats amorties) : bandit.ts. Ici, seul le bornage du label
+// (labelModel) s'applique avant d'entrer dans la vue — les ids contrôlés par l'appelant
+// ne créent jamais de bras. ---
 
 // P0-9 : jauge d'alerte « régime effondré » du bandit. Posée au boot par select.ts
 // quand MIN_SAMPLES >= DECAY_WINDOW (l'exploration ne se termine jamais : round-robin
 // pur, le gate de santé de la branche exploit n'est jamais atteint). 0 = sain.
 let banditCollapsedRegime = 0
+// Dérive de prix (pricing-drift.ts) : posée à chaque refresh du feed OpenRouter. Les ids
+// viennent de pricing.ts (bornés par construction), pas de l'appelant.
+let pricingDrift: Array<{ model: string; inputRatio: number; outputRatio: number }> = []
+export function setPricingDrift(rows: Array<{ model: string; inputRatio: number; outputRatio: number }>): void {
+  pricingDrift = rows
+}
 export function setBanditCollapsedRegime(collapsed: boolean): void {
   banditCollapsedRegime = collapsed ? 1 : 0
 }
 
-// Clé : `${provider}␟${model}` — le bandit distingue les chemins d'accès (étape 4 :
-// arbitrer moonshot-direct vs openrouter pour un même modèle).
-const bandit = new Map<string, ModelAggregate>()
-
 /** Stats amorties d'un modèle, tous projets ET chemins d'accès confondus (vue de la
  * sélection de modèle par tier — le tier ne se soucie pas du chemin). */
 export function modelAggregate(model: string): ModelAggregate {
-  const out = { requests: 0, errors: 0, costUsd: 0 }
-  const wanted = labelModel(model)
-  for (const [id, b] of bandit) {
-    if (id.slice(id.indexOf(SEP) + 1) === wanted) {
-      out.requests += b.requests
-      out.errors += b.errors
-      out.costUsd += b.costUsd
-    }
-  }
-  return out
+  return banditModelAggregate(labelModel(model))
 }
 
 /** Stats amorties d'un (chemin d'accès, modèle) précis — la vue de l'arbitrage de
  * chemin (providers/index.ts, mode 'smart'). */
 export function pathAggregate(provider: string, model: string): ModelAggregate {
-  const b = bandit.get(`${provider}${SEP}${labelModel(model)}`)
-  return b ? { ...b } : { requests: 0, errors: 0, costUsd: 0 }
+  return banditPathAggregate(provider, labelModel(model))
 }
 
 export function recordRequest(r: RequestRecord): void {
@@ -229,6 +219,7 @@ export function recordRequest(r: RequestRecord): void {
   if (r.error) s.errors += 1
   if (r.promptTokens) s.promptTokens += r.promptTokens
   if (r.completionTokens) s.completionTokens += r.completionTokens
+  if (r.cachedPromptTokens) s.cachedPromptTokens += r.cachedPromptTokens
   // P0-6 : != null, pas truthiness — un coût/facturé de 0 est une observation légitime.
   if (r.costUsd != null) s.costUsd += r.costUsd
   if (r.billedUsd != null) s.billedUsd += r.billedUsd
@@ -237,22 +228,13 @@ export function recordRequest(r: RequestRecord): void {
     s.durationCount += 1
   }
 
-  if (RHO < 1) {
-    for (const b of bandit.values()) {
-      b.requests *= RHO
-      b.errors *= RHO
-      b.costUsd *= RHO
-    }
-  }
-  const banditId = `${provider}${SEP}${labelModel(r.model)}`
-  let b = bandit.get(banditId)
-  if (!b) {
-    b = { requests: 0, errors: 0, costUsd: 0 }
-    bandit.set(banditId, b)
-  }
-  b.requests += 1
-  if (r.error) b.errors += 1
-  if (r.costUsd) b.costUsd += r.costUsd
+  banditObserve({
+    provider,
+    model: labelModel(r.model),
+    error: !!r.error,
+    costUsd: r.costUsd ?? 0,
+    candidates: r.candidates?.map(labelModel),
+  })
 }
 
 function esc(v: string): string {
@@ -295,6 +277,8 @@ export function renderProm(): string {
     const [key, model, provider] = id.split(SEP) as [string, string, string]
     line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}",kind="prompt"`, s.promptTokens)
     line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}",kind="completion"`, s.completionTokens)
+    // Sous-ensemble de kind="prompt" (pas une 3e part) : taux de cache = prompt_cached / prompt.
+    line('openmulti_tokens_total', `key="${esc(key)}",model="${esc(model)}",provider="${esc(provider)}",kind="prompt_cached"`, s.cachedPromptTokens)
   }
 
   out.push('# HELP openmulti_cost_usd_total Upstream cost in USD (from usage.cost).')
@@ -341,6 +325,17 @@ export function renderProm(): string {
   out.push('# TYPE openmulti_bandit_collapsed_regime gauge')
   out.push(`openmulti_bandit_collapsed_regime{} ${banditCollapsedRegime}`)
 
+  out.push('# HELP openmulti_pricing_drift_ratio OpenRouter price / pricing.ts price, for models whose table price drifts beyond tolerance (side = input|output). > 1 = table underestimates (quotes too low).')
+  out.push('# TYPE openmulti_pricing_drift_ratio gauge')
+  for (const d of pricingDrift) {
+    line('openmulti_pricing_drift_ratio', `model="${esc(d.model)}",side="input"`, d.inputRatio)
+    line('openmulti_pricing_drift_ratio', `model="${esc(d.model)}",side="output"`, d.outputRatio)
+  }
+
+  out.push('# HELP openmulti_bandit_store_drops_total Bandit observations not pushed to the shared store (Lua eval failed); the local view kept them.')
+  out.push('# TYPE openmulti_bandit_store_drops_total counter')
+  out.push(`openmulti_bandit_store_drops_total{} ${banditPushDrops()}`)
+
   out.push('# HELP openmulti_path_fallback_total Requests that failed over to an alternate access path (same model).')
   out.push('# TYPE openmulti_path_fallback_total counter')
   for (const [id, n] of pathFallbacks) {
@@ -361,11 +356,12 @@ export function renderProm(): string {
 /** Test helper: wipe the registry between cases. */
 export function _resetMetrics(): void {
   stats.clear()
-  bandit.clear()
+  _resetBandit()
   pricingMisses.clear()
   pathFallbacks.clear()
   pathQuarantines.clear()
   meterDrops = 0
   fieldsStripped = 0
   knownModelsCache = null
+  pricingDrift = []
 }

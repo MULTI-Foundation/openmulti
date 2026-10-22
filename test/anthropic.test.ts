@@ -12,6 +12,9 @@ process.env.OPENROUTER_API_KEY ||= 'test-upstream-key'
 process.env.OPENMULTI_API_KEYS ||= 'sk_anthropic_test'
 process.env.OPENMULTI_PROVIDER_ANTHROPIC = 'direct'
 process.env.ANTHROPIC_API_KEY = 'ak-test'
+// Auto-marquage cache_control opt-in pour les appels agent (auto-cache.ts) — n'affecte
+// que les requêtes `openmulti.purpose: 'agent'` ci-dessous.
+process.env.OPENMULTI_ANTHROPIC_AUTO_CACHE = 'agent'
 
 const KEY = 'sk_anthropic_test'
 let app: { fetch: (req: Request) => Promise<Response> }
@@ -261,4 +264,180 @@ test('P0-8 e2e stream: une erreur de lecture mi-stream -> finish_reason error + 
   const errLine = text.split('\n').find((l) => l.startsWith('data:') && l.includes('"error"'))
   assert.ok(errLine, 'objet error manquant dans le chunk final')
   assert.ok(text.trimEnd().endsWith('data: [DONE]'), '[DONE] final present')
+})
+
+// ── Prompt caching : ventilation cache_read/cache_creation + tarifs cache, cache_control ──
+
+test('anthropicTokens: prompt = input + cache_read + cache_creation, ventilation exposee en graphie OpenAI', () => {
+  assert.deepEqual(T.anthropicTokens({ input_tokens: 500, cache_read_input_tokens: 400, cache_creation_input_tokens: 100, output_tokens: 20 }), {
+    prompt_tokens: 1000,
+    completion_tokens: 20,
+    total_tokens: 1020,
+    prompt_tokens_details: { cached_tokens: 400, cache_write_tokens: 100 },
+  })
+  // sans cache : ventilation a zero, pas absente (forme stable pour l'appelant)
+  assert.deepEqual(T.anthropicTokens({ input_tokens: 10, output_tokens: 20 }).prompt_tokens_details, { cached_tokens: 0, cache_write_tokens: 0 })
+})
+
+test('e2e non-stream: cache_read a 0.3 $/M (hit), cache_creation a 3.75 $/M (ecriture 5m), le reste a 3', async () => {
+  mockResponse = () =>
+    new Response(
+      JSON.stringify({
+        id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn',
+        usage: { input_tokens: 500_000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 100_000, output_tokens: 500_000 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )
+  const res = await post({ model: 'anthropic/claude-sonnet-4-6', messages: [{ role: 'user', content: 'hi' }] })
+  const j = await res.json()
+  assert.equal(res.status, 200)
+  // 0.5M*3 + 0.4M*0.3 + 0.1M*3.75 + 0.5M*15 = 1.5 + 0.12 + 0.375 + 7.5 = 9.495
+  // (avant : 1M*3 + 7.5 = 10.5 — borne haute sur le read, borne BASSE sur l'ecriture)
+  assert.equal(j.usage.cost, 9.495)
+  assert.equal(j.usage.prompt_tokens, 1_000_000)
+  assert.deepEqual(j.usage.prompt_tokens_details, { cached_tokens: 400_000, cache_write_tokens: 100_000 })
+})
+
+test('e2e stream: cache_read/cache_creation de message_start entrent dans le cost du dernier chunk', async () => {
+  const sse = [
+    'event: message_start',
+    'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":500000,"cache_read_input_tokens":400000,"cache_creation_input_tokens":100000,"output_tokens":0}}}',
+    '',
+    'event: content_block_delta',
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}',
+    '',
+    'event: message_delta',
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":500000}}',
+    '',
+    'event: message_stop',
+    'data: {"type":"message_stop"}',
+    '',
+    '',
+  ].join('\n')
+  mockResponse = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sse))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )
+  const res = await post({ model: 'anthropic/claude-sonnet-4-6', stream: true, messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(res.status, 200)
+  const text = await res.text()
+  const usageLine = text.split('\n').find((l) => l.includes('"usage"') && l.includes('"cost"'))
+  assert.ok(usageLine, 'chunk usage absent')
+  const usage = JSON.parse(usageLine.slice(6)).usage
+  assert.equal(usage.cost, 9.495)
+  assert.deepEqual(usage.prompt_tokens_details, { cached_tokens: 400_000, cache_write_tokens: 100_000 })
+})
+
+test('splitMessages: cache_control passe tel quel sur les parts texte (user) et bascule system en blocs', () => {
+  const cc = { type: 'ephemeral' }
+  const { system, messages } = T.splitMessages([
+    { role: 'system', content: [{ type: 'text', text: 'Long preamble', cache_control: cc }] },
+    { role: 'system', content: 'Tail' },
+    { role: 'user', content: [{ type: 'text', text: 'Doc', cache_control: cc }, { type: 'text', text: 'Q?' }] },
+  ])
+  assert.deepEqual(system, [{ type: 'text', text: 'Long preamble', cache_control: cc }, { type: 'text', text: 'Tail' }])
+  assert.deepEqual(messages[0], { role: 'user', content: [{ type: 'text', text: 'Doc', cache_control: cc }, { type: 'text', text: 'Q?' }] })
+})
+
+test('splitMessages: sans cache_control, system reste une string concatenee (comportement historique)', () => {
+  const { system } = T.splitMessages([
+    { role: 'system', content: 'A' },
+    { role: 'system', content: [{ type: 'text', text: 'B' }] },
+  ])
+  assert.equal(system, 'A\n\nB')
+  const body = T.toAnthropicBody({ messages: [{ role: 'user', content: 'hi' }] }, 'anthropic/claude-sonnet-4-6', { defaultMaxTokens: 10 })
+  assert.equal(body.system, undefined, 'pas de system vide')
+})
+
+test('e2e: cache_control du system arrive a Anthropic sous forme de blocs (pas aplati en string)', async () => {
+  const cc = { type: 'ephemeral' }
+  await post({
+    model: 'anthropic/claude-sonnet-4-6',
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'Preamble', cache_control: cc }] },
+      { role: 'user', content: 'hi' },
+    ],
+  })
+  const sent = JSON.parse(lastInit.body)
+  assert.deepEqual(sent.system, [{ type: 'text', text: 'Preamble', cache_control: cc }])
+})
+
+// ── Auto-marquage cache_control (opt-in OPENMULTI_ANTHROPIC_AUTO_CACHE=agent) ──────
+
+test('auto-cache: purpose agent -> system en blocs avec marqueur sur le dernier, + fin du dernier message user', async () => {
+  await post({
+    model: 'anthropic/claude-sonnet-4-6',
+    openmulti: { purpose: 'agent' },
+    messages: [
+      { role: 'system', content: 'Preamble' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+    ],
+    tools: [{ type: 'function', function: { name: 'f', parameters: { type: 'object', properties: {} } } }],
+  })
+  const sent = JSON.parse(lastInit.body)
+  assert.deepEqual(sent.system, [{ type: 'text', text: 'Preamble', cache_control: { type: 'ephemeral' } }])
+  assert.equal(sent.tools[0].cache_control, undefined, 'le marqueur system couvre deja les tools (prefixe)')
+  assert.equal(sent.messages[0].content, 'first', 'pas de marqueur sur un ancien tour (string conservee)')
+  assert.deepEqual(sent.messages[2].content, [{ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } }])
+})
+
+test('auto-cache: sans system, le marqueur de prefixe va sur le dernier tool', async () => {
+  await post({
+    model: 'anthropic/claude-sonnet-4-6',
+    openmulti: { purpose: 'agent' },
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: [
+      { type: 'function', function: { name: 'a', parameters: { type: 'object', properties: {} } } },
+      { type: 'function', function: { name: 'b', parameters: { type: 'object', properties: {} } } },
+    ],
+  })
+  const sent = JSON.parse(lastInit.body)
+  assert.equal(sent.system, undefined)
+  assert.equal(sent.tools[0].cache_control, undefined)
+  assert.deepEqual(sent.tools[1].cache_control, { type: 'ephemeral' })
+})
+
+test('auto-cache: hors objectif opt-in, rien ne change (system string, pas de marqueur)', async () => {
+  for (const openmulti of [undefined, { purpose: 'generation' }]) {
+    await post({ model: 'anthropic/claude-sonnet-4-6', openmulti, messages: [{ role: 'system', content: 'P' }, { role: 'user', content: 'hi' }] })
+    const sent = JSON.parse(lastInit.body)
+    assert.equal(sent.system, 'P')
+    assert.ok(!JSON.stringify(sent).includes('cache_control'))
+  }
+})
+
+test('auto-cache: un marqueur pose par l\'appelant desactive l\'auto-marquage (sa strategie prime)', async () => {
+  const cc = { type: 'ephemeral' }
+  await post({
+    model: 'anthropic/claude-sonnet-4-6',
+    openmulti: { purpose: 'agent' },
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'A' }, { type: 'text', text: 'B', cache_control: cc }] },
+      { role: 'user', content: 'hi' },
+    ],
+  })
+  const sent = JSON.parse(lastInit.body)
+  assert.deepEqual(sent.system, [{ type: 'text', text: 'A' }, { type: 'text', text: 'B', cache_control: cc }])
+  assert.equal(JSON.stringify(sent.messages).includes('cache_control'), false)
+})
+
+test('applyAutoCache: pur — idempotent, et sans system ni tools ni user, aucun marqueur', () => {
+  const body: Record<string, unknown> = { model: 'm', messages: [{ role: 'assistant', content: 'x' }] }
+  T.applyAutoCache(body)
+  assert.ok(!JSON.stringify(body).includes('cache_control'))
+  const b2: Record<string, unknown> = { model: 'm', system: 'S', messages: [{ role: 'user', content: 'u' }] }
+  T.applyAutoCache(b2)
+  const once = JSON.stringify(b2)
+  T.applyAutoCache(b2)
+  assert.equal(JSON.stringify(b2), once)
+  assert.equal((once.match(/cache_control/g) ?? []).length, 2)
 })

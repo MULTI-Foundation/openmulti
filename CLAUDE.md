@@ -138,8 +138,45 @@ mounts the chat route) → `src/routes/chat.ts` (`POST /v1/chat/completions`):
   `WINDOW=0` reverts to lifetime stats (explore once, exploit forever — locked by
   `test/select.test.ts`; the bandit by `test/bandit.test.ts`). **Opt-in**: `smart` only runs when a
   caller sends `openmulti.route: 'smart'` or `OPENMULTI_DEFAULT_ROUTE=smart`. With a single
-  candidate, `smart` ≡ `default`. The bandit view in `metrics.ts` is separate from the Prometheus
-  counters, which stay monotonic.
+  candidate, `smart` ≡ `default`. The bandit view lives in **`src/bandit.ts`**, separate from the
+  Prometheus counters (which stay monotonic and per pod):
+  - **Shared between replicas (R-1)**: each observation is applied in memory AND pushed
+    fire-and-forget to the store as one atomic Lua `EVAL` (decay + add) on the hash `bandit:arms`
+    (`provider|model` → `requests|errors|costUsd|lastErrorAt`); a periodic refresh (10 s,
+    `OPENMULTI_KEYS_REFRESH_MS`) replaces the in-memory view with the shared state, so pods converge
+    within one refresh and a rollout no longer cold-starts. Zero I/O on the hot path. Store down =
+    local view kept; push failures counted in `openmulti_bandit_store_drops_total`.
+    `OPENMULTI_BANDIT_SHARED=0` reverts to per-pod state. Lua ≡ memory is locked by
+    `test/bandit-redis.test.ts` (runs only with `OPENMULTI_TEST_REDIS_URL`, skipped otherwise);
+    the rest by `test/bandit-shared.test.ts`.
+  - **Decay scope (R-2)**: when the observation carries the routing decision's `candidates`
+    (`RequestRecord.candidates`, set by `routes/chat.ts` and `forward.ts`), only the arms of THOSE
+    models (all access paths) decay — one tier's traffic no longer erodes the others' data. No
+    candidates (images, embeddings) = global decay as before.
+  - **Temporal recovery probe**: an unhealthy arm whose last error is older than
+    `OPENMULTI_SMART_RECOVERY_PROBE_S` (default 600, `0` disables) gets ONE request, whatever its
+    decayed count, before the explore step. Low traffic is why: falling under the count floor by
+    decay takes ~600 observations at WINDOW=200 — weeks at 50 req/day. A failed probe resets the
+    timer (one request per delay); a successful one leaves the arm due, so it chains until healthy.
+    Clock is injectable (`_setBanditClockForTests`).
+- **`src/auto-cache.ts`** — opt-in auto `cache_control` on the Anthropic direct path:
+  `OPENMULTI_ANTHROPIC_AUTO_CACHE=agent` (CSV of `openmulti.purpose` values, `*` = all, unset = off).
+  Two breakpoints at most: end of the stable prefix (last system block, else last tool) and end of
+  the last user message. Never when the caller set its own marker. `plan.ts` bounds input at the
+  cache WRITE rate for those requests (1.25x on Anthropic). Locked by `test/anthropic.test.ts` and
+  `test/plan.test.ts`.
+- **`src/openrouter-benchmarks.ts` + `src/pricing-drift.ts`** — curation SIGNALS for the console,
+  never routing inputs. Benchmarks: OpenRouter's public daily export (CC BY 4.0, no key;
+  `latest.manifest.json` → dated JSON, sha256 verified before parsing, 24 h cache
+  `OPENMULTI_BENCHMARKS_TTL_MS`, fail-open = last known state else null). Per benchmark × model one
+  row is kept (`auto-routing` if measured, else most accurate at its own cost — never mix providers),
+  the Pareto front (accuracy × cost/task) and "best value" (cheapest on the front within 5 pts of the
+  max) are recomputed (the export carries no badge). Served by `GET /admin/benchmarks`. Price drift:
+  `pricing.ts` vs the `/api/v1/models` feed (same 1 h cache as vision), models beyond
+  `OPENMULTI_PRICING_DRIFT_PCT` (10) are reported via `GET /admin/pricing/drift` and the gauge
+  `openmulti_pricing_drift_ratio{model,side}`; the table is NEVER auto-corrected (every price is
+  verified at a dated source). Locked by `test/openrouter-benchmarks.test.ts` and
+  `test/pricing-drift.test.ts`. Console: badges per slot candidate + Pareto table in `/admin/models`.
 - **`src/providers/openrouter.ts` → `buildUpstreamBody`** — the steering ported 1:1 from MyMULTI:
   force `usage.include: true` (cost in the final chunk), `provider.sort: 'throughput'`, and a
   `max_tokens` floor of 32000 for the `moonshotai/kimi-k2*` family when unset (Moonshot's 8192

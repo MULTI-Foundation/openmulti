@@ -5,7 +5,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SseUsageScanner, injectCostIntoSseData } from '../src/sse.ts'
+import { SseUsageScanner, injectCostIntoSseData, cachedPromptTokens, cacheWritePromptTokens } from '../src/sse.ts'
 
 test('parse usage et provider sur des lignes completes', () => {
   const s = new SseUsageScanner()
@@ -70,4 +70,37 @@ test('injectCost: enrichit uniquement l\'event usage sans cost, laisse tout le r
 test('injectCost: modele non tarife (callback undefined) -> ligne inchangee, pas de faux zero', () => {
   const out = injectCostIntoSseData('data: {"usage":{"prompt_tokens":10,"completion_tokens":5}}', () => undefined)
   assert.equal(out, null)
+})
+
+// ── Prompt caching : lecture des tokens cachés dans un bloc usage ─────────────────
+
+test('cachedPromptTokens: les deux graphies (OpenAI/Moonshot/OpenRouter et DeepSeek), la premiere gagne', () => {
+  assert.equal(cachedPromptTokens({ prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 7 } }), 7)
+  assert.equal(cachedPromptTokens({ prompt_tokens: 10, prompt_cache_hit_tokens: 6, prompt_cache_miss_tokens: 4 }), 6)
+  assert.equal(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 7 }, prompt_cache_hit_tokens: 6 }), 7)
+  assert.equal(cacheWritePromptTokens({ prompt_tokens_details: { cached_tokens: 7, cache_write_tokens: 2 } }), 2)
+})
+
+test('cachedPromptTokens: absent/invalide/negatif -> 0 (plein tarif, jamais une remise inventee)', () => {
+  assert.equal(cachedPromptTokens(undefined), 0)
+  assert.equal(cachedPromptTokens(null), 0)
+  assert.equal(cachedPromptTokens({ prompt_tokens: 10 }), 0)
+  assert.equal(cachedPromptTokens({ prompt_tokens_details: null }), 0)
+  assert.equal(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 'x' } }), 0)
+  assert.equal(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: -3 } }), 0)
+  assert.equal(cachedPromptTokens({ prompt_cache_hit_tokens: NaN }), 0)
+  assert.equal(cacheWritePromptTokens({ prompt_tokens: 10 }), 0)
+})
+
+test('injectCost: la ventilation cache du bloc usage est transmise au calcul du cout', () => {
+  const seen: unknown[] = []
+  const out = injectCostIntoSseData(
+    'data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":8,"cache_write_tokens":1}}}',
+    (pt, ct, cache) => { seen.push([pt, ct, cache]); return 0.1 },
+  )
+  assert.ok(out)
+  assert.deepEqual(seen, [[10, 5, { read: 8, write: 1 }]])
+  // sans ventilation : zeros, pas undefined (le calcul reste le plein tarif)
+  injectCostIntoSseData('data: {"usage":{"prompt_tokens":10,"completion_tokens":5}}', (pt, ct, cache) => { seen.push(cache); return 0.1 })
+  assert.deepEqual(seen[1], { read: 0, write: 0 })
 })

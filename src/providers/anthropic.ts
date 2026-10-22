@@ -13,6 +13,7 @@ import { computeCostUsd } from '../pricing.js'
 import { log } from '../log.js'
 import { recordPricingMiss } from '../metrics.js'
 import { pickAllowedFields } from './shared.js'
+import { autoCacheApplies } from '../auto-cache.js'
 import {
   toAnthropicBody,
   toOpenAIResponse,
@@ -30,9 +31,12 @@ function isRetryable(status: number): boolean {
   return RETRYABLE.has(status)
 }
 
-/** Coût synthétisé, ou undefined + trace du trou de tarif (jamais un faux zéro). */
-function costOrMiss(model: string, promptTokens: number, completionTokens: number): number | undefined {
-  const cost = computeCostUsd(model, promptTokens, completionTokens)
+/** Coût synthétisé, ou undefined + trace du trou de tarif (jamais un faux zéro). Les
+ * tokens cache (read au tarif cache hit, creation au tarif écriture 5 min) viennent de la
+ * ventilation d'anthropicTokens. */
+function costOrMiss(model: string, tokens: ReturnType<typeof anthropicTokens>): number | undefined {
+  const d = tokens.prompt_tokens_details
+  const cost = computeCostUsd(model, tokens.prompt_tokens, tokens.completion_tokens, { read: d.cached_tokens, write: d.cache_write_tokens })
   if (cost === undefined) {
     recordPricingMiss(model)
     log.warn('pricing_miss', { provider: 'anthropic', model })
@@ -46,6 +50,7 @@ function buildBody(req: ChatRequest, resolvedModel: string, maxTokensCeiling?: n
   return toAnthropicBody(clean, resolvedModel, {
     defaultMaxTokens: config.anthropic.defaultMaxTokens,
     maxTokensCeiling,
+    autoCache: autoCacheApplies(req), // lu sur la requête ORIGINALE (openmulti.purpose est strippé de clean)
   })
 }
 
@@ -71,8 +76,7 @@ async function call(body: Dict): Promise<UpstreamCall> {
 }
 
 function normalizeResponse(data: Dict, model: string): Dict {
-  const t = anthropicTokens(data.usage)
-  const cost = costOrMiss(model, t.prompt_tokens, t.completion_tokens)
+  const cost = costOrMiss(model, anthropicTokens(data.usage))
   return toOpenAIResponse(data, model, Math.floor(Date.now() / 1000), cost)
 }
 
@@ -182,7 +186,7 @@ function adaptStream(upstream: ReadableStream<Uint8Array>, model: string): Reada
             cache_creation_input_tokens: cacheCreation,
           })
           const usage: Dict = { ...tokens }
-          const cost = costOrMiss(model, tokens.prompt_tokens, tokens.completion_tokens)
+          const cost = costOrMiss(model, tokens)
           if (cost !== undefined) usage.cost = cost
           const final: Dict = { id, object: 'chat.completion.chunk', created, model, choices: [], usage }
           if (readError) {
