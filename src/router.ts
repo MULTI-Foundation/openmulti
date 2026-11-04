@@ -4,6 +4,7 @@
 
 import { candidatesFor, fastCandidates, imageCandidates, visionCandidates, audioCandidates, DEFAULT_TIER, isTier } from './catalog.js'
 import { selectModel } from './select.js'
+import { isModelDead } from './dead-models.js'
 import { resolveBareModel, resolveFamilyModel } from './model-alias.js'
 import { isVisionCapable, isAudioCapable } from './vision.js'
 import { config } from './config.js'
@@ -328,6 +329,14 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
       }
     }
   }
+  // Modèles morts (dead-models.ts : 404 terminal OpenRouter + absent du feed) : écartés
+  // tant qu'il reste un candidat vivant ; tous morts = candidats gardés (l'erreur upstream
+  // reste explicite, jamais un refus inventé ici).
+  const alive = candidates.filter((m) => !isModelDead(m))
+  if (alive.length > 0 && alive.length < candidates.length) {
+    candidates = alive
+    modalityNotes.push('unavailable model skipped')
+  }
   // E-1 : restreindre au snapshot épinglé s'il y a intersection ; sinon garder les
   // candidats courants — le vérificateur du jeton tranchera (candidate_set_mismatch).
   if (constrainTo && constrainTo.length > 0) {
@@ -345,5 +354,5 @@ export function route(req: ChatRequest, constrainTo?: readonly string[]): RouteD
   // OM-01: optional per-tier max_tokens ceiling (tier is 'economy'|'balanced'|'quality',
   // so the env name is safe to build directly). 0/unset disables it.
   const ceiling = manual ? 0 : Number(process.env[`OPENMULTI_MAX_TOKENS_${tier.toUpperCase()}`] ?? 0)
-  return { model: sel.model, reason, maxTokensCeiling: ceiling > 0 ? ceiling : undefined, candidates }
+  return { model: sel.model, reason, maxTokensCeiling: ceiling > 0 ? ceiling : undefined, candidates, auto: true }
 }

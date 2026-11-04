@@ -11,6 +11,7 @@ import { initCouncilOverrides } from './council-overrides.js'
 import { initBanditStore } from './bandit.js'
 import { initPricingDrift } from './pricing-drift.js'
 import { initVisionModels } from './vision.js'
+import { initDeadModels } from './dead-models.js'
 import { log } from './log.js'
 
 // Store partagé (metering durable + registre de clés + overrides catalog/council) —
@@ -25,6 +26,7 @@ initBanditStore()
 // Référentiel vision (feed OpenRouter, rafraîchi 1 h) — fail-open : sans données le
 // routage n'est pas filtré, jamais bloquant pour le boot.
 initVisionModels()
+initDeadModels()
 // Dérive de prix table vs feed OpenRouter (même cache que vision, 1 h) — signal only.
 initPricingDrift()
 

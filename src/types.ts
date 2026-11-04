@@ -86,6 +86,10 @@ export interface RouteDecision {
    * de devis (le pin est un ensemble, jamais un modèle imposé) et la contrainte que le
    * vérificateur du jeton applique (le modèle résolu doit y rester). */
   candidates?: string[]
+  /** true quand le modèle a été CHOISI par OpenMulti (tier / cible nommée), pas imposé par
+   * l'appelant : seule une décision auto peut être re-routée si son modèle s'avère mort
+   * (dead-models.ts). */
+  auto?: boolean
 }
 
 /** Hono environment: the auth middleware stashes the calling project's API key here. */
