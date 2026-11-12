@@ -204,6 +204,21 @@ OpenRouter instead of re-paying a doomed round-trip (`src/path-quarantine.ts`,
 (request shape) never quarantine. Model ids with an OpenRouter variant suffix
 (`:nitro`, `:free`, …) never get a direct path — the vendor doesn't know that id.
 
+**Dead models (the one cross-model exception)**: `src/dead-models.ts`, prod incident
+2026-11-03 (qwen/qwen3-coder-plus retired upstream but still a slot candidate: every election
+ended in a terminal OpenRouter 404 and agent runs died silently). A model is declared dead on
+TWO proofs: a terminal 404 on the OpenRouter path AND absence from the OpenRouter `/models`
+feed (id variants tolerated: `:suffix` stripped, `4-5` ↔ `4.5`; a listed model's 404 is
+"No endpoints found…", request-specific, never dead; feed unknown = nothing declared). Then
+(1) auto routing skips it for `OPENMULTI_DEAD_MODEL_TTL_S` (default 6 h, 0 = off; all
+candidates dead = kept), and (2) the request that found it is re-routed ONCE to another
+candidate, only when OpenMulti chose the model (`RouteDecision.auto`), never for a
+caller-pinned model or under a quote contract. That does not break "don't change the
+answer": the caller asked for `auto`, and a retired model has no answer to preserve.
+Curation signal: `openmulti_catalog_model_unlisted{model}` = chat catalog candidates absent
+from the feed (alert on it before users hit it); `openmulti_model_dead_total`. Locked by
+`test/dead-models.test.ts`.
+
 ## The contract is law
 
 `test/contract.test.ts` locks the coupling points MyMULTI depends on (documented in

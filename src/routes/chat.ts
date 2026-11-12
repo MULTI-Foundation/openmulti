@@ -13,6 +13,7 @@ import { TIMEOUTS, config } from '../config.js'
 import { log } from '../log.js'
 import { recordRequest, recordRetry, recordPathFallback, keyLabel, type RequestRecord } from '../metrics.js'
 import { markPathUnservable } from '../path-quarantine.js'
+import { markModelDead } from '../dead-models.js'
 import { meterUsage } from '../meter.js'
 import { checkSpendCap, checkBalance, noteLocalSpend, secondsToUtcMidnight, marginFor, signupGate, topupUrlFor, reserveSpend, isMetered } from '../keys.js'
 import { SseUsageScanner, sseLineTransform, mutateSseUsageLine, cachedPromptTokens } from '../sse.js'
@@ -162,7 +163,7 @@ chat.post('/v1/chat/completions', async (c) => {
   }
   // Chemins d'accès ordonnés : l'élu d'abord, puis les alternatives de fallback
   // (même modèle - la réponse est préservée ; cf providers/index.ts pathsFor).
-  const paths = pathsFor(decision.model)
+  let paths = pathsFor(decision.model)
   let provider = paths[0]!
   const isStream = req.stream === true
 
@@ -289,106 +290,134 @@ chat.post('/v1/chat/completions', async (c) => {
     releaseReservation()
   }
 
-  pathLoop: for (let p = 0; p < paths.length; p++) {
-    provider = paths[p]!
-    const next = paths[p + 1]
-    const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
-    let attempt = 0
-    while (true) {
-      try {
-        call = await provider.call(body)
-      } catch (e) {
-        const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
-        // P0-11 : sous contrat (jeton de devis présenté), AU PLUS UN dispatch upstream.
-        // Un échec transport APRÈS envoi (timeout, reset en cours de lecture) peut déjà
-        // avoir été facturé côté provider ; un retry ou un failover re-facturerait le
-        // même étage et pourrait dépasser le montant signé - le devis ne couvre chaque
-        // étage qu'UNE fois. Direction sûre : refus structuré, zéro re-dispatch ;
-        // l'appelant relance s'il le veut (nouvelle exécution, nouveau paiement).
-        if (pin) {
-          log.error('upstream_error_contract_no_retry', { key, model: decision.model, provider: provider.name, reason, durationMs: Date.now() - startedAt })
+  let upstream!: Response
+  let rerouted = false
+  routeLoop: for (;;) {
+    pathLoop: for (let p = 0; p < paths.length; p++) {
+      provider = paths[p]!
+      const next = paths[p + 1]
+      const body = provider.buildBody(req, decision.model, decision.maxTokensCeiling)
+      let attempt = 0
+      while (true) {
+        try {
+          call = await provider.call(body)
+        } catch (e) {
+          const reason = e instanceof Error && e.name === 'AbortError' ? 'upstream connect timeout' : 'upstream unreachable'
+          // P0-11 : sous contrat (jeton de devis présenté), AU PLUS UN dispatch upstream.
+          // Un échec transport APRÈS envoi (timeout, reset en cours de lecture) peut déjà
+          // avoir été facturé côté provider ; un retry ou un failover re-facturerait le
+          // même étage et pourrait dépasser le montant signé - le devis ne couvre chaque
+          // étage qu'UNE fois. Direction sûre : refus structuré, zéro re-dispatch ;
+          // l'appelant relance s'il le veut (nouvelle exécution, nouveau paiement).
+          if (pin) {
+            log.error('upstream_error_contract_no_retry', { key, model: decision.model, provider: provider.name, reason, durationMs: Date.now() - startedAt })
+            settle({ error: true, durationMs: Date.now() - startedAt })
+            return c.json({ error: { message: `${reason} - no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
+          }
+          if (attempt < config.maxRetries) {
+            attempt++
+            recordRetry(key, decision.model, provider.name)
+            log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, reason })
+            await backoff(attempt)
+            continue
+          }
+          if (next) {
+            failOver(next, reason)
+            continue pathLoop
+          }
+          log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
           settle({ error: true, durationMs: Date.now() - startedAt })
-          return c.json({ error: { message: `${reason} - no retry under a quote contract: a re-dispatched stage could be billed twice and exceed the signed amount; re-quote and resubmit`, type: 'upstream_error', code: 'contract_no_retry' } }, 504)
+          return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
         }
-        if (attempt < config.maxRetries) {
-          attempt++
-          recordRetry(key, decision.model, provider.name)
-          log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, reason })
-          await backoff(attempt)
-          continue
+
+        if (!call.response.ok && provider.isRetryable(call.response.status)) {
+          // P0-11 : même règle sous contrat pour un statut transitoire REÇU (429/5xx) -
+          // pas de retry ni de failover ; l'erreur upstream normalisée (OM-07) est
+          // renvoyée telle quelle, statut conservé. Un seul dispatch a eu lieu.
+          if (pin) break pathLoop
+          if (attempt < config.maxRetries) {
+            attempt++
+            const retryAfter = call.response.headers.get('retry-after')
+            await call.response.body?.cancel().catch(() => {}) // drain the failed body
+            recordRetry(key, decision.model, provider.name)
+            log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, status: call.response.status })
+            await backoff(attempt, retryAfter)
+            continue
+          }
+          if (next) {
+            await call.response.body?.cancel().catch(() => {})
+            failOver(next, call.response.status)
+            continue pathLoop
+          }
         }
-        if (next) {
-          failOver(next, reason)
+        // Un 4xx NON-retryable est déterministe POUR CE CHEMIN, pas forcément pour
+        // l'autre : les API natives ont des exigences de forme propres qu'OpenRouter
+        // normalise (vécu prod 2026-07-17 : DeepSeek V4 thinking exige le round-trip de
+        // reasoning_content -> 400 ; Z.ai refuse les content parts ; Qwen 403 quota).
+        // Une seule bascule, jamais de retry same-path (même corps -> même refus), et
+        // pas sous contrat (P0-11 : au plus un dispatch). Si l'autre chemin refuse
+        // aussi, son erreur est renvoyée normalement (la requête était en cause).
+        if (!call.response.ok && call.response.status < 500 && !provider.isRetryable(call.response.status) && next && !pin) {
+          const detail = await call.response.text().catch(() => '')
+          // 401/403/404 = le CHEMIN est en cause (clé, quota, modèle absent du vendor) :
+          // quarantaine de la paire pour que l'élection cesse de payer l'aller-retour perdu.
+          markPathUnservable(provider.name, decision.model, call.response.status)
+          failOver(next, `${call.response.status} ${detail.slice(0, 300)}`)
           continue pathLoop
         }
-        log.error('upstream_error', { key, model: decision.model, reason, attempts: attempt + 1, durationMs: Date.now() - startedAt })
-        settle({ error: true, durationMs: Date.now() - startedAt })
-        return c.json({ error: { message: reason, type: 'upstream_error' } }, 504)
+        break pathLoop
       }
-
-      if (!call.response.ok && provider.isRetryable(call.response.status)) {
-        // P0-11 : même règle sous contrat pour un statut transitoire REÇU (429/5xx) -
-        // pas de retry ni de failover ; l'erreur upstream normalisée (OM-07) est
-        // renvoyée telle quelle, statut conservé. Un seul dispatch a eu lieu.
-        if (pin) break pathLoop
-        if (attempt < config.maxRetries) {
-          attempt++
-          const retryAfter = call.response.headers.get('retry-after')
-          await call.response.body?.cancel().catch(() => {}) // drain the failed body
-          recordRetry(key, decision.model, provider.name)
-          log.warn('upstream_retry', { key, model: decision.model, provider: provider.name, attempt, status: call.response.status })
-          await backoff(attempt, retryAfter)
-          continue
-        }
-        if (next) {
-          await call.response.body?.cancel().catch(() => {})
-          failOver(next, call.response.status)
-          continue pathLoop
-        }
-      }
-      // Un 4xx NON-retryable est déterministe POUR CE CHEMIN, pas forcément pour
-      // l'autre : les API natives ont des exigences de forme propres qu'OpenRouter
-      // normalise (vécu prod 2026-07-17 : DeepSeek V4 thinking exige le round-trip de
-      // reasoning_content -> 400 ; Z.ai refuse les content parts ; Qwen 403 quota).
-      // Une seule bascule, jamais de retry same-path (même corps -> même refus), et
-      // pas sous contrat (P0-11 : au plus un dispatch). Si l'autre chemin refuse
-      // aussi, son erreur est renvoyée normalement (la requête était en cause).
-      if (!call.response.ok && call.response.status < 500 && !provider.isRetryable(call.response.status) && next && !pin) {
-        const detail = await call.response.text().catch(() => '')
-        // 401/403/404 = le CHEMIN est en cause (clé, quota, modèle absent du vendor) :
-        // quarantaine de la paire pour que l'élection cesse de payer l'aller-retour perdu.
-        markPathUnservable(provider.name, decision.model, call.response.status)
-        failOver(next, `${call.response.status} ${detail.slice(0, 300)}`)
-        continue pathLoop
-      }
-      break pathLoop
     }
-  }
 
-  // Trace le chemin d'accès quand il n'est pas celui par défaut, ou qu'un fallback a
-  // eu lieu (reason = texte libre de l'extension ; le chemin OpenRouter nominal reste
-  // byte-identique à l'historique).
-  if (provider.name !== 'openrouter' || failedOver) {
-    decision.reason = `${decision.reason}, via ${provider.name}${failedOver ? ` (fallback from ${paths[0]!.name})` : ''}`
-  }
-
-  const upstream = call.response
-  if (!upstream.ok) {
-    // Refus terminal d'identité de chemin (dernier chemin, contrat P0-11 ou fallback
-    // coupé) : même quarantaine — le filtre de statut vit dans markPathUnservable.
-    if (upstream.status < 500 && !provider.isRetryable(upstream.status)) {
-      markPathUnservable(provider.name, decision.model, upstream.status)
+    // Trace le chemin d'accès quand il n'est pas celui par défaut, ou qu'un fallback a
+    // eu lieu (reason = texte libre de l'extension ; le chemin OpenRouter nominal reste
+    // byte-identique à l'historique).
+    if (provider.name !== 'openrouter' || failedOver) {
+      decision.reason = `${decision.reason}, via ${provider.name}${failedOver ? ` (fallback from ${paths[0]!.name})` : ''}`
     }
-    // OM-07 : le corps d'erreur upstream n'est jamais relayé (divulgation provider/
-    // routing/internals) - détail loggé côté serveur, schéma stable côté appelant,
-    // statut conservé.
-    const text = await upstream.text().catch(() => '')
-    log.warn('upstream_not_ok', {
-      key, model: decision.model, provider: provider.name, status: upstream.status, failedOver,
-      upstreamBody: text.slice(0, 500), durationMs: Date.now() - startedAt,
-    })
-    settle({ error: true, durationMs: Date.now() - startedAt })
-    return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
+
+    upstream = call.response
+    if (!upstream.ok) {
+      // Refus terminal d'identité de chemin (dernier chemin, contrat P0-11 ou fallback
+      // coupé) : même quarantaine — le filtre de statut vit dans markPathUnservable.
+      if (upstream.status < 500 && !provider.isRetryable(upstream.status)) {
+        markPathUnservable(provider.name, decision.model, upstream.status)
+      }
+      // OM-07 : le corps d'erreur upstream n'est jamais relayé (divulgation provider/
+      // routing/internals) - détail loggé côté serveur, schéma stable côté appelant,
+      // statut conservé.
+      const text = await upstream.text().catch(() => '')
+      log.warn('upstream_not_ok', {
+        key, model: decision.model, provider: provider.name, status: upstream.status, failedOver,
+        upstreamBody: text.slice(0, 500), durationMs: Date.now() - startedAt,
+      })
+      // Modèle MORT (dead-models.ts : 404 terminal OpenRouter + absent du feed) sur une
+      // décision AUTO, hors contrat : la requête est re-routée UNE fois vers un autre
+      // candidat (aucun octet n'est parti, un 404 n'a rien facturé). L'échec est observé
+      // (bandit/metering) comme un failover. Vécu prod 2026-11-03 (qwen3-coder-plus).
+      if (!rerouted && decision.auto && !pin && markModelDead(decision.model, upstream.status, provider.name)) {
+        record({ error: true, durationMs: Date.now() - startedAt })
+        const dead = decision.model
+        let next: typeof decision | null = null
+        try {
+          next = route(req)
+        } catch {
+          next = null
+        }
+        if (next && next.model !== dead) {
+          log.warn('model_dead_reroute', { key, from: dead, to: next.model })
+          decision = { ...next, reason: `${next.reason}, rerouted from ${dead} (model unavailable)` }
+          paths = pathsFor(decision.model)
+          provider = paths[0]!
+          failedOver = false
+          rerouted = true
+          continue routeLoop
+        }
+      }
+      settle({ error: true, durationMs: Date.now() - startedAt })
+      return c.json(normalizedUpstreamError(upstream.status), upstream.status as 400)
+    }
+    break
   }
 
   // ── Streaming: pipe through + inter-chunk watchdog ─────────────────────────

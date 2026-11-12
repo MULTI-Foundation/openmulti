@@ -182,6 +182,18 @@ export function recordPathQuarantine(model: string, provider: string): void {
   pathQuarantines.set(id, (pathQuarantines.get(id) ?? 0) + 1)
 }
 
+// Modèles morts (dead-models.ts) : déclarations (compteur) + candidats du catalogue
+// absents du feed OpenRouter (jauge, signal de curation à alerter).
+const modelDeaths = new Map<string, number>()
+export function recordModelDead(model: string): void {
+  const m = labelModel(model)
+  modelDeaths.set(m, (modelDeaths.get(m) ?? 0) + 1)
+}
+let catalogUnlisted: string[] = []
+export function setCatalogUnlisted(models: string[]): void {
+  catalogUnlisted = models
+}
+
 // --- Vue « bandit » (stats amorties) : bandit.ts. Ici, seul le bornage du label
 // (labelModel) s'applique avant d'entrer dans la vue — les ids contrôlés par l'appelant
 // ne créent jamais de bras. ---
@@ -350,6 +362,14 @@ export function renderProm(): string {
     line('openmulti_path_quarantine_total', `model="${esc(model)}",provider="${esc(provider)}"`, n)
   }
 
+  out.push('# HELP openmulti_model_dead_total Models declared dead (terminal OpenRouter 404 AND absent from the /models feed), excluded from auto routing for a TTL.')
+  out.push('# TYPE openmulti_model_dead_total counter')
+  for (const [model, n] of modelDeaths) line('openmulti_model_dead_total', `model="${esc(model)}"`, n)
+
+  out.push('# HELP openmulti_catalog_model_unlisted Chat catalog candidates absent from the OpenRouter /models feed (retired or misspelled model id). 1 per model.')
+  out.push('# TYPE openmulti_catalog_model_unlisted gauge')
+  for (const model of catalogUnlisted) line('openmulti_catalog_model_unlisted', `model="${esc(model)}"`, 1)
+
   return out.join('\n') + '\n'
 }
 
@@ -360,6 +380,8 @@ export function _resetMetrics(): void {
   pricingMisses.clear()
   pathFallbacks.clear()
   pathQuarantines.clear()
+  modelDeaths.clear()
+  catalogUnlisted = []
   meterDrops = 0
   fieldsStripped = 0
   knownModelsCache = null
