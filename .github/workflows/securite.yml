@@ -32,7 +32,6 @@ jobs:
   dependances:
     name: Aucune faille haute dans les dependances
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -40,11 +39,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      # Dependances de production seulement, a partir du lockfile, seuil "high".
-      # NON BLOQUANT pour l instant (continue-on-error) : des failles hautes
-      # sont connues et leur correctif demande une montee de version a part.
-      # Retirer continue-on-error des que cette montee est fusionnee.
-      - run: npm audit --omit=dev --audit-level=high
+      # Dependances de production, a partir du lockfile. Bloquant sur toute
+      # faille haute ou critique, sauf exception nommee, justifiee et datee
+      # dans .github/audit-exceptions.json.
+      - run: node .github/scripts/audit.mjs
 
   workflows:
     name: Workflows surs (zizmor)
