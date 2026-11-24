@@ -1,0 +1,7 @@
+# Qui doit approuver quoi. Une seule personne valide les PR pour l'instant ;
+# ajouter une ligne par zone quand d'autres mainteneurs arrivent.
+*                    @JulienAu
+
+# Zones ou une erreur coute cher : relecture attentive attendue.
+/.github/            @JulienAu
+/deploy/             @JulienAu
