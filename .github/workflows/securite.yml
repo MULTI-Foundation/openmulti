@@ -1,0 +1,58 @@
+# Controles de securite mecaniques, sur chaque PR et chaque push sur main.
+# La revue de fond (logique, invariants, regressions) n'est pas ici : elle est
+# faite par le mainteneur avec son agent, voir AGENTS.md.
+name: securite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Aucun secret dans le depot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Tout l'historique : un secret retire dans un commit suivant reste
+          # lisible dans le depot.
+          fetch-depth: 0
+          persist-credentials: false
+      # L'image est epinglee par empreinte (v8.30.1). On n'utilise pas
+      # gitleaks-action, qui demande une licence pour les organisations.
+      - run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo
+          ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git . --no-banner --redact
+
+  dependances:
+    name: Aucune faille haute dans les dependances
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # Dependances de production seulement, a partir du lockfile, seuil "high".
+      # NON BLOQUANT pour l instant (continue-on-error) : des failles hautes
+      # sont connues et leur correctif demande une montee de version a part.
+      # Retirer continue-on-error des que cette montee est fusionnee.
+      - run: npm audit --omit=dev --audit-level=high
+
+  workflows:
+    name: Workflows surs (zizmor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # Actions epinglees par SHA, permissions minimales, pas d'injection par
+      # les champs d'une PR. --offline : aucun jeton, aucun appel a l'API.
+      - run: pipx run zizmor==1.33.1 --offline .github/workflows

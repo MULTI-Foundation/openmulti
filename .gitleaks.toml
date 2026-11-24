@@ -1,0 +1,14 @@
+# Configuration gitleaks (scan de secrets, workflow securite.yml).
+# On part des regles par defaut et on n'exclut que des lignes precises de
+# tests, jamais un fichier entier ni une regle.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Valeurs factices des tests (cle et secret x402 de test, titre d'un test pris pour une cle)"
+regexTarget = "line"
+regexes = [
+  '''sk_x402pin_test''',
+  '''x402pin-secret''',
+  '''cachedPromptTokens: absent/invalide''',
+]
