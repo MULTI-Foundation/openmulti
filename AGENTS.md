@@ -26,8 +26,7 @@ fichier ajoute ce qui concerne le travail a plusieurs.
 | Controle | Ou | Bloquant |
 |---|---|---|
 | Types, tests, test de contrat | `ci.yml` / `test` | oui |
-| Secrets, workflows | `securite.yml` | oui |
-| Failles des dependances | `securite.yml` | pas encore (failles connues a corriger) |
+| Secrets, workflows, failles hautes des dependances | `securite.yml` | oui |
 | Revue de fond et revue de securite par IA | poste du mainteneur, statut `revue-ia` | oui |
 
 ## Ce que la revue regarde en priorite

@@ -1,0 +1,7 @@
+{
+  "GHSA-mrhx-c7xc-m3w5": {
+    "paquet": "zod 3.x, tire par @coinbase/cdp-sdk, abitype et viem (sous @coinbase/x402)",
+    "raison": "Pas de correctif en 3.x, et ces paquets ne supportent pas zod 4. Le seul usage de @coinbase/x402 est createFacilitatorConfig (src/x402-cdp.ts), qui fabrique les en-tetes d'authentification du facilitateur a partir de nos propres cles : aucune donnee client n'y passe.",
+    "expire": "2027-02-28"
+  }
+}
