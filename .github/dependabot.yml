@@ -1,0 +1,15 @@
+# Dependabot : uniquement les correctifs de securite, regroupes en une seule PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # 0 : pas de PR de simple montee de version. Les correctifs de securite
+    # ne sont pas concernes par cette limite.
+    open-pull-requests-limit: 0
+    groups:
+      securite:
+        applies-to: security-updates
+        patterns:
+          - "*"
