@@ -1,0 +1,43 @@
+name: Idee de fonctionnalite
+description: Proposer une fonctionnalite ou un changement. Point de depart de la boucle idee -> spec -> code -> prod.
+title: "Idee : "
+labels: ["idee"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Decrire le besoin, pas la solution. La discussion se fait en commentaires, la spec s'ecrit ensuite dans `specs/` (voir `specs/README.md`).
+  - type: textarea
+    id: probleme
+    attributes:
+      label: Le probleme
+      description: Qui est gene, dans quelle situation, et qu'est-ce que ca lui coute aujourd'hui.
+    validations:
+      required: true
+  - type: textarea
+    id: resultat
+    attributes:
+      label: Le resultat attendu
+      description: Ce que la personne pourra faire une fois la fonctionnalite livree. Une ou deux phrases.
+    validations:
+      required: true
+  - type: textarea
+    id: existant
+    attributes:
+      label: Ce qui existe deja
+      description: Chemins des fichiers ou ecrans concernes, s'ils sont connus. Ecrire "pas verifie" plutot que supposer.
+  - type: textarea
+    id: hors-perimetre
+    attributes:
+      label: Hors perimetre
+      description: Ce que cette idee ne couvre pas.
+  - type: dropdown
+    id: redaction
+    attributes:
+      label: Redige par
+      options:
+        - une personne
+        - un agent, relu par son auteur
+        - un agent, pas relu
+    validations:
+      required: true

@@ -1,0 +1,45 @@
+name: Bug
+description: Quelque chose marchait ou devrait marcher, et ne marche pas.
+title: "Bug : "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: constat
+    attributes:
+      label: Ce qui se passe
+      description: Le comportement observe, avec le message d'erreur exact s'il y en a un.
+    validations:
+      required: true
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Ce qui etait attendu
+    validations:
+      required: true
+  - type: textarea
+    id: reproduire
+    attributes:
+      label: Pour le reproduire
+      description: Les etapes, l'adresse de la page, le compte de test utilise. Aucun mot de passe ni jeton ici.
+    validations:
+      required: true
+  - type: dropdown
+    id: environnement
+    attributes:
+      label: Ou
+      options:
+        - production
+        - recette
+        - en local
+    validations:
+      required: true
+  - type: dropdown
+    id: redaction
+    attributes:
+      label: Redige par
+      options:
+        - une personne
+        - un agent, relu par son auteur
+        - un agent, pas relu
+    validations:
+      required: true

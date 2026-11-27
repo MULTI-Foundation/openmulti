@@ -2,6 +2,9 @@
 
 <!-- Le probleme, le choix retenu. Lier le ticket s'il existe. -->
 
+- Issue : #
+- Spec : `specs/` (ou "sans spec" : correctif ou changement sans effet visible)
+
 ## Comment c'est verifie
 
 <!-- Commandes lancees, scenarios couverts. -->

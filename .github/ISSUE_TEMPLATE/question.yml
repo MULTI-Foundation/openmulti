@@ -1,0 +1,16 @@
+name: Question
+description: Comprendre comment quelque chose fonctionne ou pourquoi c'est fait ainsi.
+title: "Question : "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: La question
+    validations:
+      required: true
+  - type: textarea
+    id: deja-lu
+    attributes:
+      label: Ce qui a deja ete lu
+      description: Fichiers, documents ou issues consultes avant de demander.
