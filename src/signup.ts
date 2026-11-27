@@ -21,7 +21,7 @@
 //     nouvelle clé du MÊME projet (rotation self-service, continuité de facturation),
 //     jamais un projet neuf (sinon l'alias +tag ne servirait à rien).
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { storeClient, storeHealthy, type StoreClient } from './store.js'
 import { config } from './config.js'
 import { createKey, listCaps, SIGNUP_PROJECT_PREFIX } from './keys.js'
@@ -68,9 +68,10 @@ const identityHash = (email: string) =>
   createHash('sha256').update(emailIdentity(email)).digest('hex').slice(0, 32)
 
 function generateCode(): string {
-  const bytes = randomBytes(CODE_LEN)
+  // randomInt tire sans biais. Un octet modulo 31 favorisait les 8 premieres
+  // lettres de l'alphabet (256 n'est pas un multiple de 31).
   let code = ''
-  for (const b of bytes) code += CODE_ALPHABET[b % CODE_ALPHABET.length]
+  for (let i = 0; i < CODE_LEN; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]
   return code
 }
 
